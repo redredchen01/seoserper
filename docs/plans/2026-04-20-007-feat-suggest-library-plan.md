@@ -236,7 +236,7 @@ flowchart TB
 
 Unit 4 is a no-op stub — the real static-fallback implementation is deferred to a follow-up plan. Full implementation plus verification logic come back when observable signal justifies.
 
-- [ ] **Unit 1: `SuggestResult` audit + extensions + config constants**
+- [x] **Unit 1: `SuggestResult` audit + extensions + config constants**
 
 **Goal:** Extend `SuggestResult` with optional library-populated fields, OR introduce a parallel type if an audit shows extension would break existing callers. Add library constants to `config.py`.
 
@@ -272,7 +272,7 @@ Unit 4 is a no-op stub — the real static-fallback implementation is deferred t
 
 ---
 
-- [ ] **Unit 2: `suggest_cache` table (status column) + 2 helpers**
+- [x] **Unit 2: `suggest_cache` table (status column) + 2 helpers**
 
 **Goal:** Add a parallel `suggest_cache` table with an explicit `status` column and two helpers (`suggest_cache_get`, `suggest_cache_put`). Status-aware TTL filtering lives in SQL against the column, not `json_extract`.
 
@@ -323,7 +323,7 @@ Unit 4 is a no-op stub — the real static-fallback implementation is deferred t
 
 ---
 
-- [ ] **Unit 3: `get_suggestions` library implementation**
+- [x] **Unit 3: `get_suggestions` library implementation**
 
 **Goal:** Implement `seoserper.suggest.get_suggestions(q, hl, gl, limit, fresh, retry)` — split q forms (upstream-raw vs cache-normalized), status-aware cache access, gated transient retry, safe degrade, log hygiene.
 
@@ -376,7 +376,7 @@ Unit 4 is a no-op stub — the real static-fallback implementation is deferred t
 
 ---
 
-- [ ] **Unit 4: Static fallback stub**
+- [x] **Unit 4: Static fallback stub**
 
 **Goal:** Provide a stub `_static_fallback(normalized_q, hl, gl_norm, limit)` that returns empty items — the real implementation is deferred to a follow-up plan triggered by concrete operational signal.
 
@@ -402,7 +402,7 @@ Unit 4 is a no-op stub — the real static-fallback implementation is deferred t
 
 ---
 
-- [ ] **Unit 5: Engine migration — default swap + pins `retry=False`**
+- [x] **Unit 5: Engine migration — default swap + pins `retry=False`**
 
 **Goal:** Change `AnalysisEngine`'s default `fetch_fn` to the library's `get_suggestions`, wrapped in a partial/closure that pins `retry=False` so the engine's operator-facing `retry_failed_surfaces` remains the sole retry layer.
 
