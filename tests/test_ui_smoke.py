@@ -19,6 +19,28 @@ def _patch_key(monkeypatch, key: str | None):
     monkeypatch.setattr(config, "SERPAPI_KEY", key)
 
 
+def _stub_quota(monkeypatch, caption: str | None):
+    """Short-circuit the SerpAPI account endpoint so tests stay offline."""
+    import seoserper.serpapi_account as m
+
+    def fake_info(_key, timeout=5.0):
+        # Return a non-None dict only when caption is requested; format_quota_caption
+        # will handle None by returning None.
+        if caption is None:
+            return None
+        return {"plan_searches_left": 87, "searches_per_month": 100}
+
+    def fake_format(_info):
+        return caption
+
+    monkeypatch.setattr(m, "fetch_quota_info", fake_info)
+    monkeypatch.setattr(m, "format_quota_caption", fake_format)
+    # app.py imports at module level — patch there too for the already-imported symbol.
+    import app as _app
+    monkeypatch.setattr(_app, "fetch_quota_info", fake_info)
+    monkeypatch.setattr(_app, "format_quota_caption", fake_format)
+
+
 def _isolate_db(monkeypatch, tmp_path: Path):
     """Patch both the env var (for config reload paths) and the module
     attribute (for already-imported modules reading config.DB_PATH)."""
@@ -114,9 +136,55 @@ def test_app_renders_input_row(monkeypatch, tmp_path):
     _isolate_db(monkeypatch, tmp_path)
     at = AppTest.from_file(APP_PATH).run(timeout=10)
     assert not at.exception
-    labels = [i.label for i in at.text_input]
-    assert "关键字" in labels
-    assert "语言" in labels
-    assert "地区" in labels
+    text_labels = [i.label for i in at.text_input]
+    assert "关键字" in text_labels
+    # Language / country is a single selectbox over SUPPORTED_LOCALES.
+    select_labels = [s.label for s in at.selectbox]
+    assert "语言 / 地区" in select_labels
     submit_buttons = [b for b in at.button if b.label == "Submit"]
     assert len(submit_buttons) == 1
+
+
+def test_full_mode_quota_caption_shows_when_available(monkeypatch, tmp_path):
+    _patch_key(monkeypatch, "fake-key")
+    _isolate_db(monkeypatch, tmp_path)
+    _stub_quota(monkeypatch, "SerpAPI 剩余 87/100")
+    at = AppTest.from_file(APP_PATH).run(timeout=10)
+    captions = [c.value for c in at.caption]
+    assert any("SerpAPI 剩余" in c for c in captions), captions
+
+
+def test_full_mode_quota_caption_absent_when_endpoint_fails(monkeypatch, tmp_path):
+    _patch_key(monkeypatch, "fake-key")
+    _isolate_db(monkeypatch, tmp_path)
+    _stub_quota(monkeypatch, None)
+    at = AppTest.from_file(APP_PATH).run(timeout=10)
+    captions = [c.value for c in at.caption]
+    # Full mode caption still present, quota caption absent.
+    assert any("Full mode" in c for c in captions), captions
+    assert not any("剩余" in c for c in captions), captions
+
+
+def test_suggest_only_no_quota_caption(monkeypatch, tmp_path):
+    _patch_key(monkeypatch, None)
+    _isolate_db(monkeypatch, tmp_path)
+    _stub_quota(monkeypatch, "should-not-show")
+    at = AppTest.from_file(APP_PATH).run(timeout=10)
+    captions = [c.value for c in at.caption]
+    assert not any("SerpAPI 剩余" in c for c in captions), captions
+
+
+def test_locale_selectbox_has_mvp_options(monkeypatch, tmp_path):
+    _patch_key(monkeypatch, None)
+    _isolate_db(monkeypatch, tmp_path)
+    at = AppTest.from_file(APP_PATH).run(timeout=10)
+    sb = [s for s in at.selectbox if s.label == "语言 / 地区"]
+    assert len(sb) == 1
+    # AppTest's `options` returns the formatted display strings (post-format_func),
+    # not the original option tuples — they're the labels as users see them.
+    options = list(sb[0].options)
+    assert len(options) == 4  # en/zh-CN/zh-TW/ja per config
+    assert "English (US)" in options
+    assert "简体中文 (CN)" in options
+    assert "繁體中文 (TW)" in options
+    assert "日本語 (JP)" in options

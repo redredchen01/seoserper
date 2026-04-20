@@ -70,11 +70,15 @@ def _coerce_key(value: str | None) -> str | None:
 SERPAPI_KEY: str | None = _coerce_key(os.environ.get("SERPAPI_KEY"))
 SERPAPI_URL: str = "https://serpapi.com/search.json"
 
-# MVP-scope locales (plan §Key Decisions). Other locales work but quality is unwarranted.
-SUPPORTED_LOCALES: tuple[tuple[str, str], ...] = (
-    ("en", "us"),
-    ("zh", "cn"),
-    ("ja", "jp"),
+# MVP-scope locales (plan §Key Decisions). Each tuple is (lang, country, label).
+# The UI renders label text; engine/storage consume the (lang, country) pair.
+# Users CAN still analyze other locales via direct DB manipulation; the UI
+# is opinionated for the quality-validated set only.
+SUPPORTED_LOCALES: tuple[tuple[str, str, str], ...] = (
+    ("en", "us", "English (US)"),
+    ("zh-CN", "cn", "简体中文 (CN)"),
+    ("zh-TW", "tw", "繁體中文 (TW)"),
+    ("ja", "jp", "日本語 (JP)"),
 )
 
 # Source labels — surfaced in MD export frontmatter and UI metadata bar (R5).

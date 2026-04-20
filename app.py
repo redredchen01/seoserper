@@ -25,6 +25,7 @@ from seoserper import config
 from seoserper.core.engine import AnalysisEngine, ProgressEvent
 from seoserper.export import build_filename, render_analysis_to_md
 from seoserper.fetchers.serp_cache import fetch_serp_data_cached
+from seoserper.serpapi_account import fetch_quota_info, format_quota_caption
 from seoserper.models import (
     AnalysisJob,
     FailureCategory,
@@ -76,6 +77,16 @@ def _ensure_session_state() -> None:
         ss._current_job_id = None
     if "_historical_job_id" not in ss:
         ss._historical_job_id = None
+    if "_quota_caption" not in ss:
+        # One-shot quota lookup per Streamlit session — the dashboard at
+        # https://serpapi.com/manage-api-key is the source of truth for exact
+        # count; this is a best-effort UI hint. Refreshes only on full restart.
+        if _full_mode_available():
+            ss._quota_caption = format_quota_caption(
+                fetch_quota_info(config.SERPAPI_KEY)
+            )
+        else:
+            ss._quota_caption = None
 
 
 def _boot_engine() -> AnalysisEngine:
@@ -249,12 +260,16 @@ def _render_current(job: AnalysisJob) -> None:
 def _render_mode_notice() -> None:
     """Top-of-page notice: muted grey, non-dismissible.
 
-    Full mode (SERPAPI_KEY set): ``Full mode · SerpAPI``.
+    Full mode (SERPAPI_KEY set): ``Full mode · SerpAPI``, plus an optional
+    quota caption when the account endpoint returned data at session init.
     Suggest-only (SERPAPI_KEY unset): prompt to set the env var; recovery
     checklist lives in ``seoserper/config.py`` module docstring.
     """
     if _full_mode_available():
         st.caption("Full mode · SerpAPI")
+        quota = st.session_state.get("_quota_caption")
+        if quota:
+            st.caption(quota)
     else:
         st.caption(
             "Suggest-only · SERPAPI_KEY 未设置 · 启用 Full mode 见 seoserper/config.py"
@@ -271,20 +286,26 @@ def main() -> None:
     _render_mode_notice()
 
     # Input row
-    cols = st.columns([4, 1, 1, 1])
+    cols = st.columns([4, 2, 1])
     with cols[0]:
         query = st.text_input("关键字", key="_query_input")
     with cols[1]:
-        lang = st.text_input("语言", value="en", key="_lang_input")
+        # Single selectbox over the MVP locale set — options are the full
+        # (lang, country, label) tuple; format_func renders the label only.
+        locale = st.selectbox(
+            "语言 / 地区",
+            options=config.SUPPORTED_LOCALES,
+            format_func=lambda opt: opt[2],
+            key="_locale_input",
+        )
     with cols[2]:
-        country = st.text_input("地区", value="us", key="_country_input")
-    with cols[3]:
         st.write("")
         submitted = st.button("Submit", use_container_width=True, type="primary")
 
+    lang, country, _label = locale
     if submitted and query.strip():
         engine = _boot_engine()
-        job_id = engine.submit(query.strip(), lang.strip(), country.strip())
+        job_id = engine.submit(query.strip(), lang, country)
         ss._current_job_id = job_id
         ss._historical_job_id = None
 
