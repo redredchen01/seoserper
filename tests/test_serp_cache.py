@@ -42,8 +42,9 @@ def _patched_get(response):
 
 
 def test_cache_key_shape():
-    assert _cache_key("coffee", "en", "us") == "coffee|en|us"
-    assert _cache_key("跑步鞋", "zh-CN", "cn") == "跑步鞋|zh-CN|cn"
+    # Plan 005 Unit 3: engine prefix added; default 'google'.
+    assert _cache_key("coffee", "en", "us") == "google|coffee|en|us"
+    assert _cache_key("跑步鞋", "zh-CN", "cn") == "google|跑步鞋|zh-CN|cn"
 
 
 def test_cacheable_all_ok():
@@ -166,16 +167,16 @@ def test_wrapper_miss_fetches_and_stores(db_path):
         )
     assert result[SurfaceName.PAA].status == SurfaceStatus.OK
     assert m.call_count == 1
-    # Row is now in cache.
-    cached = cache_get("coffee|en|us", ttl_seconds=3600, db_path=db_path)
+    # Row is now in cache (post-plan-005 engine-prefixed key).
+    cached = cache_get("google|coffee|en|us", ttl_seconds=3600, db_path=db_path)
     assert cached is not None
     assert "related_questions" in cached
 
 
 def test_wrapper_hit_skips_http(db_path):
     body = (FIXTURES / "ok_en_us_coffee.json").read_text()
-    # Pre-populate cache.
-    cache_put("coffee|en|us", json.loads(body), db_path=db_path)
+    # Pre-populate cache with the post-plan-005 key format.
+    cache_put("google|coffee|en|us", json.loads(body), db_path=db_path)
     with patch("seoserper.fetchers.serp.requests.get") as m:
         result = fetch_serp_data_cached(
             "coffee", "en", "us", api_key="fake-key", db_path=db_path
@@ -187,8 +188,7 @@ def test_wrapper_hit_skips_http(db_path):
 
 def test_wrapper_different_locale_misses(db_path):
     body = (FIXTURES / "ok_en_us_coffee.json").read_text()
-    cache_put("coffee|en|us", json.loads(body), db_path=db_path)
-    # Different locale → miss.
+    cache_put("google|coffee|en|us", json.loads(body), db_path=db_path)
     with _patched_get(_response(200, body)) as m:
         fetch_serp_data_cached(
             "coffee", "zh-CN", "cn", api_key="fake-key", db_path=db_path
@@ -201,27 +201,25 @@ def test_wrapper_failed_response_not_cached(db_path):
         fetch_serp_data_cached(
             "qqqq", "en", "us", api_key="fake-key", db_path=db_path
         )
-    # Rate-limit failure must not populate cache.
-    assert cache_get("qqqq|en|us", ttl_seconds=3600, db_path=db_path) is None
+    assert cache_get("google|qqqq|en|us", ttl_seconds=3600, db_path=db_path) is None
 
 
 def test_wrapper_ttl_expiration_triggers_refetch(db_path):
     body = (FIXTURES / "ok_en_us_coffee.json").read_text()
-    cache_put("coffee|en|us", json.loads(body), db_path=db_path)
-    # Backdate
+    cache_put("google|coffee|en|us", json.loads(body), db_path=db_path)
     from seoserper.storage import get_connection
     with get_connection(db_path) as conn:
         conn.execute(
             "UPDATE serp_cache SET created_at = datetime('now', '-200 seconds') "
             "WHERE cache_key = ?",
-            ("coffee|en|us",),
+            ("google|coffee|en|us",),
         )
     with _patched_get(_response(200, body)) as m:
         fetch_serp_data_cached(
             "coffee", "en", "us", api_key="fake-key",
             db_path=db_path, ttl_seconds=60,
         )
-    assert m.call_count == 1  # stale → refetched
+    assert m.call_count == 1
 
 
 def test_wrapper_empty_both_surfaces_is_cacheable(db_path):
@@ -231,7 +229,7 @@ def test_wrapper_empty_both_surfaces_is_cacheable(db_path):
         fetch_serp_data_cached(
             "xyzzzzz", "en", "us", api_key="fake-key", db_path=db_path
         )
-    assert cache_get("xyzzzzz|en|us", ttl_seconds=3600, db_path=db_path) is not None
+    assert cache_get("google|xyzzzzz|en|us", ttl_seconds=3600, db_path=db_path) is not None
 
 
 def test_wrapper_non_ok_surface_not_cached(db_path):
@@ -307,3 +305,45 @@ def test_cache_invalidate_followed_by_cached_fetch_misses(db_path):
             "coffee", "en", "us", api_key="fake-key", db_path=db_path
         )
     assert m.call_count == 1
+
+
+# --- engine dimension in cache key (plan 005 Unit 3) -------------------------
+
+
+def test_cache_key_includes_engine_prefix():
+    assert _cache_key("coffee", "en", "us") == "google|coffee|en|us"
+    assert _cache_key("coffee", "en", "us", engine="bing") == "bing|coffee|en|us"
+
+
+def test_google_and_bing_same_query_separate_cache_rows(db_path):
+    """Cache isolation: same query+locale but different engine → 2 rows."""
+    from seoserper.storage import cache_get, cache_put
+    cache_put("google|coffee|en|us", {"v": "google"}, db_path=db_path)
+    cache_put("bing|coffee|en|us", {"v": "bing"}, db_path=db_path)
+    assert cache_get("google|coffee|en|us", 3600, db_path=db_path) == {"v": "google"}
+    assert cache_get("bing|coffee|en|us", 3600, db_path=db_path) == {"v": "bing"}
+
+
+def test_wrapper_engine_bing_routes_to_bing_cache_row(db_path):
+    """fetch_serp_data_cached with engine=bing stores at bing|... key."""
+    body = (FIXTURES / "ok_bing_en_us_coffee.json").read_text()
+    with _patched_get(_response(200, body)):
+        fetch_serp_data_cached(
+            "coffee", "en", "us", api_key="fake-key",
+            engine="bing", db_path=db_path,
+        )
+    from seoserper.storage import cache_get
+    assert cache_get("bing|coffee|en|us", 3600, db_path=db_path) is not None
+    # Google row must NOT have been created.
+    assert cache_get("google|coffee|en|us", 3600, db_path=db_path) is None
+
+
+def test_legacy_3part_cache_key_misses(db_path):
+    """Pre-plan-005 3-part keys (no engine prefix) become orphans — lookup misses."""
+    from seoserper.storage import cache_put, cache_get
+    cache_put("coffee|en|us", {"legacy": True}, db_path=db_path)
+    # New code reads with engine-prefixed key → miss.
+    assert cache_get("google|coffee|en|us", 3600, db_path=db_path) is None
+    # The legacy row still exists (but unreadable by the new key format)
+    # — it'll age out via TTL. Harmless.
+    assert cache_get("coffee|en|us", 3600, db_path=db_path) == {"legacy": True}

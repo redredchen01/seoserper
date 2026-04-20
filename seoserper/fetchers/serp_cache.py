@@ -21,9 +21,13 @@ from seoserper.models import ParseResult, SurfaceName, SurfaceStatus
 from seoserper.storage import cache_get, cache_put
 
 
-def _cache_key(query: str, lang: str, country: str) -> str:
-    """ASCII-debuggable key. SQLite PK handles uniqueness; no hashing."""
-    return f"{query}|{lang}|{country}"
+def _cache_key(query: str, lang: str, country: str, engine: str = "google") -> str:
+    """ASCII-debuggable key. Engine dimension added in plan 005 Unit 3.
+
+    Legacy 3-part keys (pre-plan-005) become unreadable but harmless —
+    cache_get misses on a mismatched key, and old rows age out via TTL.
+    """
+    return f"{engine}|{query}|{lang}|{country}"
 
 
 def _result_is_cacheable(result: dict[SurfaceName, ParseResult]) -> bool:
@@ -44,38 +48,30 @@ def fetch_serp_data_cached(
     country: str,
     *,
     api_key: str,
+    engine: str = "google",
     db_path: str | None = None,
     ttl_seconds: int | None = None,
     timeout: float = config.SERPAPI_TIMEOUT_SECONDS,
 ) -> dict[SurfaceName, ParseResult]:
     """Cache-aware fetch. Signature matches fetch_serp_data + db_path kwarg.
 
-    Args:
-        query / lang / country: request parameters.
-        api_key: SerpAPI key (required on cache miss, ignored on hit).
-        db_path: SQLite path for the cache table. None uses config.DB_PATH.
-        ttl_seconds: override for the cache window. None uses config default.
-        timeout: upstream HTTP timeout on miss.
-
-    Returns the same ``dict[SurfaceName, ParseResult]`` shape as the
-    uncached fetch_serp_data — callers (engine) don't need to know which
-    code path served them.
+    Cache key includes engine, so Google and Bing responses for the same
+    (query, lang, country) never cross-contaminate.
     """
     ttl = ttl_seconds if ttl_seconds is not None else config.SERP_CACHE_TTL_SECONDS
-    key = _cache_key(query, lang, country)
+    key = _cache_key(query, lang, country, engine)
 
     cached_payload = cache_get(key, ttl, db_path=db_path)
     if cached_payload is not None:
         return extract_surfaces(cached_payload, query=query)
 
     payload, failure = fetch_serp_raw(
-        query, lang, country, api_key=api_key, timeout=timeout
+        query, lang, country, api_key=api_key, engine=engine, timeout=timeout
     )
     if failure is not None:
-        # Don't cache failures. Next call gets a fresh retry.
         return _both_failed(failure)
 
-    assert payload is not None  # invariant from fetch_serp_raw
+    assert payload is not None
     result = extract_surfaces(payload, query=query)
 
     if _result_is_cacheable(result):
