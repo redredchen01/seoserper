@@ -59,6 +59,15 @@ class RelatedSearch:
 
 
 @dataclass
+class ParseResult:
+    """Return type of Unit 4's parse_serp(). One per SERP surface (PAA / Related)."""
+
+    status: SurfaceStatus
+    items: list = field(default_factory=list)
+    failure_category: FailureCategory | None = None
+
+
+@dataclass
 class SurfaceResult:
     """One row of the `surfaces` table, hydrated with deserialized items."""
 

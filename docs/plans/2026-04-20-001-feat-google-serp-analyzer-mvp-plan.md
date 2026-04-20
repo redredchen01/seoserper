@@ -459,7 +459,7 @@ flowchart TB
 
 ---
 
-- [ ] **Unit 5: Analysis Engine 协调**
+- [x] **Unit 5: Analysis Engine 协调** (18/18 tests ✓; DI-style parse_fn + ProgressEvent queue + retry 保留 ok surface + typed exception → FailureCategory mapping)
 
 **Goal:** 把 Unit 2 / 3 / 4 / 1 串起来。主线程 submit → engine worker 线程跑 Suggest HTTP + 提交 Playwright render + parse + 逐版位 UPDATE storage + 推送 progress 事件。单按钮 Retry 重跑非 ok 版位。
 
@@ -565,7 +565,7 @@ flowchart TB
 
 ---
 
-- [ ] **Unit 7: Streamlit UI（`app.py`）**
+- [x] **Unit 7: Streamlit UI（`app.py`）** (4/4 smoke tests ✓; 垂直 3 版位 + 侧栏历史 + preflight + progressive reveal + export MD + retry；parser 缺席时用 stub fallback 让 Suggest 仍可跑)
 
 **Goal:** 完整 UI：输入行 + 3 版位 stack + 侧栏历史 + progressive reveal + copy 按钮 + export + 历史回看 banner + preflight。
 
