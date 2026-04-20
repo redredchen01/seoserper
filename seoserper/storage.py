@@ -59,6 +59,15 @@ CREATE TABLE IF NOT EXISTS surfaces (
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (job_id, surface)
 );
+
+-- Plan 004 Unit B. SerpAPI response cache keyed by (query, lang, country).
+-- Stores the raw JSON payload so re-extraction on hit stays future-proof if
+-- the extractor logic evolves. TTL enforced at read-time in cache_get.
+CREATE TABLE IF NOT EXISTS serp_cache (
+    cache_key TEXT PRIMARY KEY,
+    response_json TEXT NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 # Items in surfaces.data_json are serialized as plain dicts. Map surface → dataclass
@@ -383,3 +392,74 @@ def _deserialize_items(surface: SurfaceName, data_json: str) -> list:
     except json.JSONDecodeError:
         return []
     return [cls(**item) for item in raw]
+
+
+# --- SerpAPI response cache (plan 004 Unit B) --------------------------------
+
+
+def cache_get(
+    cache_key: str,
+    ttl_seconds: int,
+    db_path: str | None = None,
+) -> dict | None:
+    """Return the cached raw SerpAPI payload if fresh, else None.
+
+    Fresh := created_at within ``ttl_seconds`` of now. Stale rows are NOT
+    returned but are also not auto-deleted here (see cache_prune).
+    """
+    with get_connection(db_path) as conn:
+        row = conn.execute(
+            "SELECT response_json FROM serp_cache "
+            "WHERE cache_key = ? "
+            "  AND created_at >= datetime('now', ?)",
+            (cache_key, f"-{ttl_seconds} seconds"),
+        ).fetchone()
+    if row is None:
+        return None
+    try:
+        return json.loads(row["response_json"])
+    except json.JSONDecodeError:
+        return None
+
+
+def cache_put(
+    cache_key: str,
+    payload: dict,
+    db_path: str | None = None,
+    *,
+    ttl_seconds: int | None = None,
+) -> None:
+    """Store a raw SerpAPI payload. Overwrites any existing row for the key.
+
+    When ``ttl_seconds`` is provided, opportunistically prune expired rows
+    on the same transaction — keeps the table size bounded without a cron.
+    """
+    body = json.dumps(payload, ensure_ascii=False)
+    with get_connection(db_path) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO serp_cache (cache_key, response_json, created_at) "
+            "VALUES (?, ?, CURRENT_TIMESTAMP)",
+            (cache_key, body),
+        )
+        if ttl_seconds is not None:
+            conn.execute(
+                "DELETE FROM serp_cache WHERE created_at < datetime('now', ?)",
+                (f"-{ttl_seconds} seconds",),
+            )
+
+
+def cache_prune(ttl_seconds: int, db_path: str | None = None) -> int:
+    """Delete all rows older than ``ttl_seconds``. Returns deletion count."""
+    with get_connection(db_path) as conn:
+        cursor = conn.execute(
+            "DELETE FROM serp_cache WHERE created_at < datetime('now', ?)",
+            (f"-{ttl_seconds} seconds",),
+        )
+        return cursor.rowcount
+
+
+def cache_clear_all(db_path: str | None = None) -> int:
+    """Wipe the entire serp_cache table. Returns deletion count."""
+    with get_connection(db_path) as conn:
+        cursor = conn.execute("DELETE FROM serp_cache")
+        return cursor.rowcount

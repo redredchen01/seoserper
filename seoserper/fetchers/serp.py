@@ -144,20 +144,22 @@ def _extract_related(related, *, query: str) -> ParseResult:
     )
 
 
-def fetch_serp_data(
+def fetch_serp_raw(
     query: str,
     lang: str,
     country: str,
     *,
     api_key: str,
     timeout: float = config.SERPAPI_TIMEOUT_SECONDS,
-) -> dict[SurfaceName, ParseResult]:
-    """Single call to SerpAPI. Returns a dict with PAA + RELATED ParseResults.
+) -> tuple[dict | None, FailureCategory | None]:
+    """Call SerpAPI and return the raw parsed JSON dict or a FailureCategory.
 
-    Never raises. All error conditions map to per-surface FAILED ParseResults
-    with the appropriate ``FailureCategory``. The engine treats this function
-    exactly like the former ``parse_fn`` it replaced, so upstream code at
-    ``AnalysisEngine._apply_parsed_surface`` needs no structural change.
+    Exactly one of the return tuple elements is non-None:
+      - (dict, None)    on HTTP 200 with valid JSON shape and no error field
+      - (None, category) on any failure mode (HTTP, JSON, quota, shape)
+
+    Extracted from fetch_serp_data so the cache wrapper (Unit B) can store
+    the raw payload and replay extraction later even if extract logic shifts.
     """
     params = {
         "engine": "google",
@@ -172,43 +174,67 @@ def fetch_serp_data(
     try:
         resp = requests.get(config.SERPAPI_URL, params=params, timeout=timeout)
     except (requests.exceptions.Timeout, requests.exceptions.ConnectionError):
-        return _both_failed(FailureCategory.NETWORK_ERROR)
+        return None, FailureCategory.NETWORK_ERROR
     except requests.exceptions.RequestException:
-        return _both_failed(FailureCategory.NETWORK_ERROR)
+        return None, FailureCategory.NETWORK_ERROR
 
-    # Bad/missing key: use NETWORK_ERROR per plan R-E1 — credentials are not
-    # a rate-limit signal.
     if resp.status_code in (401, 403):
-        return _both_failed(FailureCategory.NETWORK_ERROR)
+        return None, FailureCategory.NETWORK_ERROR
     if resp.status_code == 429:
-        return _both_failed(FailureCategory.BLOCKED_RATE_LIMIT)
+        return None, FailureCategory.BLOCKED_RATE_LIMIT
     if resp.status_code != 200:
-        return _both_failed(FailureCategory.NETWORK_ERROR)
+        return None, FailureCategory.NETWORK_ERROR
 
-    # JSON decode. A Cloudflare interstitial or HTML body lands here.
     try:
         payload = json.loads(resp.text or "")
     except (json.JSONDecodeError, ValueError):
-        return _both_failed(FailureCategory.SELECTOR_NOT_FOUND)
+        return None, FailureCategory.SELECTOR_NOT_FOUND
 
     if not isinstance(payload, dict):
-        return _both_failed(FailureCategory.SELECTOR_NOT_FOUND)
+        return None, FailureCategory.SELECTOR_NOT_FOUND
 
-    # SerpAPI sometimes returns 200 with an ``error`` field (quota exhausted
-    # being the dominant case). Treat any non-empty error as a provider-level
-    # failure; distinguish quota-out from other causes by needle match.
     err = payload.get("error")
     if err:
         err_lower = str(err).lower()
         if any(needle in err_lower for needle in _QUOTA_EXHAUSTED_NEEDLES):
-            return _both_failed(FailureCategory.BLOCKED_RATE_LIMIT)
-        return _both_failed(FailureCategory.NETWORK_ERROR)
+            return None, FailureCategory.BLOCKED_RATE_LIMIT
+        return None, FailureCategory.NETWORK_ERROR
 
-    paa_result = _extract_paa(payload.get("related_questions"))
-    related_result = _extract_related(
-        payload.get("related_searches"), query=query
-    )
+    return payload, None
+
+
+def extract_surfaces(payload: dict, *, query: str) -> dict[SurfaceName, ParseResult]:
+    """Pure transform: SerpAPI payload → per-surface ParseResults.
+
+    Separated from fetch_serp_raw so cached raw payloads can be re-extracted
+    on each hit (cache survives extractor logic changes).
+    """
     return {
-        SurfaceName.PAA: paa_result,
-        SurfaceName.RELATED: related_result,
+        SurfaceName.PAA: _extract_paa(payload.get("related_questions")),
+        SurfaceName.RELATED: _extract_related(
+            payload.get("related_searches"), query=query
+        ),
     }
+
+
+def fetch_serp_data(
+    query: str,
+    lang: str,
+    country: str,
+    *,
+    api_key: str,
+    timeout: float = config.SERPAPI_TIMEOUT_SECONDS,
+) -> dict[SurfaceName, ParseResult]:
+    """Uncached single-call fetch. Composes fetch_serp_raw + extract_surfaces.
+
+    Never raises. All error conditions map to per-surface FAILED ParseResults.
+    The engine treats this function exactly like the former ``parse_fn`` it
+    replaced, so upstream code at ``_apply_parsed_surface`` is unchanged.
+    """
+    payload, failure = fetch_serp_raw(
+        query, lang, country, api_key=api_key, timeout=timeout
+    )
+    if failure is not None:
+        return _both_failed(failure)
+    assert payload is not None  # invariant: exactly one is None
+    return extract_surfaces(payload, query=query)

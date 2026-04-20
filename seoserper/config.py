@@ -87,6 +87,10 @@ SUGGEST_TIMEOUT_SECONDS = 5.0
 # end-to-end latency is typically 2-6s; 15s leaves headroom for slow months.
 SERPAPI_TIMEOUT_SECONDS = 15.0
 
+# SerpAPI response cache TTL. Plan 004 Unit B: repeated (query, lang, country)
+# within this window returns the cached payload and spends zero quota.
+SERP_CACHE_TTL_SECONDS = 86400  # 24h
+
 # Sweep threshold for `running` jobs left behind by a process crash (R14 tail cleanup).
 ORPHAN_RUNNING_MINUTES = 30
 

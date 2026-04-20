@@ -24,7 +24,7 @@ import streamlit as st
 from seoserper import config
 from seoserper.core.engine import AnalysisEngine, ProgressEvent
 from seoserper.export import build_filename, render_analysis_to_md
-from seoserper.fetchers.serp import fetch_serp_data
+from seoserper.fetchers.serp_cache import fetch_serp_data_cached
 from seoserper.models import (
     AnalysisJob,
     FailureCategory,
@@ -95,9 +95,14 @@ def _boot_engine() -> AnalysisEngine:
 
     if _full_mode_available():
         key = config.SERPAPI_KEY
-        # Closure carries the key; engine signature stays (q, l, c).
-        serp_fn = partial(fetch_serp_data, api_key=key)
-        ss._engine = AnalysisEngine(serp_fn=serp_fn, db_path=ss._db_path)
+        db_path = ss._db_path
+        # Closure carries the key + DB path; engine signature stays (q, l, c).
+        # Cached wrapper short-circuits on repeated (query, lang, country)
+        # within SERP_CACHE_TTL_SECONDS — saves free-tier quota.
+        serp_fn = partial(
+            fetch_serp_data_cached, api_key=key, db_path=db_path
+        )
+        ss._engine = AnalysisEngine(serp_fn=serp_fn, db_path=db_path)
     else:
         ss._engine = AnalysisEngine(serp_fn=None, db_path=ss._db_path)
     return ss._engine
