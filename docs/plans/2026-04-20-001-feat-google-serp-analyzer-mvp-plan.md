@@ -277,7 +277,7 @@ flowchart TB
 
 ---
 
-- [ ] **Unit 2: Suggest fetcher（HTTP，pure `requests`）**
+- [x] **Unit 2: Suggest fetcher（HTTP，pure `requests`）** (19/19 tests ✓; plan 修正：CT 检查下掉，真实 CT 是 text/javascript，改走 body 前缀 `<` 检测)
 
 **Goal:** Google autocomplete JSON endpoint 获取 10 条建议，严格形状验证，异常全部映射到 SurfaceStatus + FailureCategory。
 
