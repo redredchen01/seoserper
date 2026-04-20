@@ -83,6 +83,14 @@ class AnalysisEngine:
         self._db_path = db_path
         self._fetch_fn = fetch_fn
         self.progress_queue: queue.Queue[ProgressEvent] = queue.Queue()
+        # Captures the library-layer metadata from the most recent _do_suggest
+        # call (provider_used, from_cache, latency_ms). UI reads this to
+        # render a "cache hit · 12ms" badge so the library's cache behavior
+        # is visible to the operator. Keys:
+        #   provider_used: "cache" | "google" | "static" | "none" | ""
+        #   from_cache: bool
+        #   latency_ms: int
+        self.last_suggest_meta: dict = {}
 
     # --- public API ---
 
@@ -216,6 +224,14 @@ class AnalysisEngine:
 
     def _do_suggest(self, job_id: int, query: str, lang: str, country: str) -> None:
         result = self._fetch_fn(query, lang, country)
+        # Capture library metadata for UI visibility badge. Attributes are
+        # populated by seoserper.suggest.get_suggestions; raw fetchers
+        # leave them at their dataclass defaults.
+        self.last_suggest_meta = {
+            "provider_used": getattr(result, "provider_used", ""),
+            "from_cache": getattr(result, "from_cache", False),
+            "latency_ms": getattr(result, "latency_ms", 0),
+        }
         update_surface(
             job_id, SurfaceName.SUGGEST, result.status,
             items=result.items, failure_category=result.failure_category,

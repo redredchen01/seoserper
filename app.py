@@ -290,6 +290,23 @@ def _render_surface(job: AnalysisJob, name: SurfaceName) -> None:
 
     # status == OK
     if name == SurfaceName.SUGGEST:
+        # Plan 007: show library cache/provider badge when available.
+        # `last_suggest_meta` is populated by the engine's _do_suggest from
+        # the SuggestResult returned by seoserper.suggest.get_suggestions.
+        # Only renders for the most recent suggest call (engine-level state,
+        # not persisted per-job) — historical views show no badge.
+        meta = getattr(st.session_state._engine, "last_suggest_meta", {}) or {}
+        if meta and job.id == st.session_state._current_job_id:
+            provider = meta.get("provider_used", "")
+            latency = meta.get("latency_ms", 0)
+            if meta.get("from_cache"):
+                st.caption(f"ℹ️ 🔄 cache hit · {latency} ms · 同字再查會一直命中 12h")
+            elif provider == "google":
+                st.caption(f"ℹ️ 🌐 google (upstream) · {latency} ms · 已寫入 cache")
+            elif provider == "static":
+                st.caption(f"ℹ️ 📚 static fallback · {latency} ms")
+            elif provider == "none":
+                st.caption(f"ℹ️ ⚠️ degraded · {latency} ms · 無 fallback")
         for item in surface.items:
             st.markdown(f"{item.rank}. {item.text}")
     elif name == SurfaceName.PAA:
