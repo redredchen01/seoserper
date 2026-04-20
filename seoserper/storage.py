@@ -463,3 +463,17 @@ def cache_clear_all(db_path: str | None = None) -> int:
     with get_connection(db_path) as conn:
         cursor = conn.execute("DELETE FROM serp_cache")
         return cursor.rowcount
+
+
+def cache_invalidate(cache_key: str, db_path: str | None = None) -> int:
+    """Delete a single cache row. Returns 1 if removed, 0 if absent.
+
+    Used by app.py when the operator ticks 'force refresh' — the next
+    fetch_serp_data_cached call is guaranteed to miss and refill the row
+    with fresh data.
+    """
+    with get_connection(db_path) as conn:
+        cursor = conn.execute(
+            "DELETE FROM serp_cache WHERE cache_key = ?", (cache_key,)
+        )
+        return cursor.rowcount

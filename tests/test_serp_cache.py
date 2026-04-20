@@ -270,3 +270,40 @@ def test_wrapper_second_hit_within_ttl_does_not_prune_self(db_path):
         )
     assert m.call_count == 0
     assert result[SurfaceName.PAA].status == SurfaceStatus.OK
+
+
+# --- cache_invalidate (Unit I) ------------------------------------------------
+
+
+def test_cache_invalidate_removes_specific_key(db_path):
+    from seoserper.storage import cache_invalidate
+    cache_put("coffee|en|us", {"v": 1}, db_path=db_path)
+    cache_put("tea|en|us", {"v": 2}, db_path=db_path)
+    removed = cache_invalidate("coffee|en|us", db_path=db_path)
+    assert removed == 1
+    assert cache_get("coffee|en|us", ttl_seconds=3600, db_path=db_path) is None
+    # Other key untouched.
+    assert cache_get("tea|en|us", ttl_seconds=3600, db_path=db_path) is not None
+
+
+def test_cache_invalidate_missing_key_returns_zero(db_path):
+    from seoserper.storage import cache_invalidate
+    assert cache_invalidate("never-seen|en|us", db_path=db_path) == 0
+
+
+def test_cache_invalidate_followed_by_cached_fetch_misses(db_path):
+    """End-to-end: invalidate → next fetch_serp_data_cached call hits HTTP."""
+    import json
+    body = (FIXTURES / "ok_en_us_coffee.json").read_text()
+    cache_put("coffee|en|us", json.loads(body), db_path=db_path)
+
+    # Before invalidate — would be a hit
+    from seoserper.storage import cache_invalidate
+    cache_invalidate("coffee|en|us", db_path=db_path)
+
+    # Next call must miss (HTTP invoked)
+    with _patched_get(_response(200, body)) as m:
+        fetch_serp_data_cached(
+            "coffee", "en", "us", api_key="fake-key", db_path=db_path
+        )
+    assert m.call_count == 1

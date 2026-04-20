@@ -42,7 +42,9 @@ from seoserper.models import (
     SurfaceName,
     SurfaceStatus,
 )
+from seoserper.fetchers.serp_cache import _cache_key
 from seoserper.storage import (
+    cache_invalidate,
     get_job,
     init_db,
     list_recent_jobs,
@@ -323,8 +325,26 @@ def main() -> None:
         st.write("")
         submitted = st.button("Submit", use_container_width=True, type="primary")
 
+    # Secondary controls — only show when Full mode is active (cache bypass
+    # is meaningless without SerpAPI in the loop).
+    bypass_cache = False
+    if _full_mode_available():
+        bypass_cache = st.checkbox(
+            "忽略缓存（强制调用 SerpAPI 拉新数据）",
+            value=False,
+            key="_bypass_cache_input",
+            help="勾选后本次 Submit 不读 24h 缓存；新数据依然会写回缓存。",
+        )
+
     lang, country, _label = locale
     if submitted and query.strip():
+        if bypass_cache and _full_mode_available():
+            # Pre-invalidate the exact key so the downstream cached wrapper
+            # misses → live SerpAPI call → stores fresh row.
+            cache_invalidate(
+                _cache_key(query.strip(), lang, country),
+                db_path=ss._db_path,
+            )
         engine = _boot_engine()
         job_id = engine.submit(query.strip(), lang, country)
         ss._current_job_id = job_id

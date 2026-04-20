@@ -186,6 +186,24 @@ def test_full_mode_quota_caption_absent_when_endpoint_fails(monkeypatch, tmp_pat
     assert not any("剩余" in c for c in captions), captions
 
 
+def test_full_mode_shows_bypass_cache_checkbox(monkeypatch, tmp_path):
+    _patch_key(monkeypatch, "fake-key")
+    _isolate_db(monkeypatch, tmp_path)
+    _stub_quota(monkeypatch, "SerpAPI 剩余 87/100")
+    at = AppTest.from_file(APP_PATH).run(timeout=10)
+    checkboxes = [cb.label for cb in at.checkbox]
+    assert any("忽略缓存" in label for label in checkboxes), checkboxes
+
+
+def test_suggest_only_hides_bypass_cache_checkbox(monkeypatch, tmp_path):
+    _patch_key(monkeypatch, None)
+    _isolate_db(monkeypatch, tmp_path)
+    at = AppTest.from_file(APP_PATH).run(timeout=10)
+    checkboxes = [cb.label for cb in at.checkbox]
+    # Bypass is meaningless without SerpAPI — checkbox should be absent.
+    assert not any("忽略缓存" in label for label in checkboxes), checkboxes
+
+
 def test_suggest_only_no_quota_caption(monkeypatch, tmp_path):
     _patch_key(monkeypatch, None)
     _isolate_db(monkeypatch, tmp_path)
