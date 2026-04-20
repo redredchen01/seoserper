@@ -78,9 +78,8 @@ SUPPORTED_LOCALES: tuple[tuple[str, str], ...] = (
 )
 
 # Source labels — surfaced in MD export frontmatter and UI metadata bar (R5).
-# Unit 5 updates SOURCE_SERP to reflect the SerpAPI provider.
 SOURCE_SUGGEST = "Google Suggest API"
-SOURCE_SERP = "Google Search Playwright"
+SOURCE_SERP = "SerpAPI"
 
 # Timeouts
 SUGGEST_TIMEOUT_SECONDS = 5.0

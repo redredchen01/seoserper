@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     started_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     completed_at TIMESTAMP,
     source_suggest TEXT NOT NULL DEFAULT 'Google Suggest API',
-    source_serp TEXT NOT NULL DEFAULT 'Google Search Playwright',
+    source_serp TEXT NOT NULL DEFAULT 'SerpAPI',
     render_mode TEXT NOT NULL DEFAULT 'full'
 );
 
@@ -102,7 +102,7 @@ def _migrate_jobs_add_source_columns(conn: sqlite3.Connection) -> None:
             )
         if "source_serp" not in cols:
             conn.execute(
-                "ALTER TABLE jobs ADD COLUMN source_serp TEXT NOT NULL DEFAULT 'Google Search Playwright'"
+                "ALTER TABLE jobs ADD COLUMN source_serp TEXT NOT NULL DEFAULT 'SerpAPI'"
             )
         conn.commit()
     except sqlite3.OperationalError as exc:

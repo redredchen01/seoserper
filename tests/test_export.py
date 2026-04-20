@@ -45,7 +45,7 @@ def _job(
         overall_status=status,
         started_at=stamp,
         source_suggest="Google Suggest API",
-        source_serp="Google Search Playwright",
+        source_serp="SerpAPI",
         surfaces=surfaces or {},
     )
 
@@ -179,7 +179,7 @@ def test_frontmatter_carries_source_and_status_triplet():
     )
     md = render_analysis_to_md(job)
     assert "source_suggest: Google Suggest API" in md
-    assert "source_serp: Google Search Playwright" in md
+    assert "source_serp: SerpAPI" in md
     assert "status_suggestions: ok" in md
     assert "status_paa: failed" in md
     assert "status_related: empty" in md
@@ -361,7 +361,7 @@ def _suggest_only_job(
         overall_status=JobStatus.COMPLETED,
         started_at=STAMP,
         source_suggest="Google Suggest API",
-        source_serp="Google Search Playwright",
+        source_serp="SerpAPI",
         render_mode="suggest-only",
         surfaces={
             SurfaceName.SUGGEST: SurfaceResult(

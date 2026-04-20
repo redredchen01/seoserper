@@ -5,7 +5,7 @@ country: us
 render_mode: full
 timestamp: 2026-04-20T14:30:00Z
 source_suggest: Google Suggest API
-source_serp: Google Search Playwright
+source_serp: SerpAPI
 status_suggestions: failed
 status_paa: failed
 status_related: failed

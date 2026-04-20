@@ -271,7 +271,11 @@ def test_schema_v0_migration_adds_source_columns(tmp_path: Path):
         assert version == 1
         legacy = conn.execute("SELECT source_suggest, source_serp FROM jobs WHERE query='legacy'").fetchone()
         assert legacy["source_suggest"] == "Google Suggest API"
-        assert legacy["source_serp"] == "Google Search Playwright"
+        # Migration default updated in plan 003 when Playwright path retired.
+        # Legacy v0 rows going through current init_db get the SerpAPI label
+        # as backfill; rows written while the old default was in force keep
+        # their stored value (no retroactive rewrite).
+        assert legacy["source_serp"] == "SerpAPI"
 
 
 def test_concurrent_update_surface_on_same_job(db_path: str):
