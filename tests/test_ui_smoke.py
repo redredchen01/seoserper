@@ -193,7 +193,7 @@ def test_history_filter_no_match_shows_caption(monkeypatch, tmp_path):
     inputs = _find_filter_input(at)
     inputs[0].set_value("xxyyzz").run(timeout=10)
     captions = [c.value for c in at.sidebar.caption]
-    assert any("无匹配" in c and "xxyyzz" in c for c in captions), captions
+    assert any("当前过滤下无记录" in c for c in captions), captions
 
 
 def test_engine_radio_renders_three_options_with_compare_default(monkeypatch, tmp_path):

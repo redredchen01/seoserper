@@ -90,6 +90,27 @@ _EMPTY_MSG_TEMPLATES = {
 
 _ENGINE_LABEL = {"google": "Google", "bing": "Bing"}
 
+# CJK codepoint ranges used for the EMPTY-state hint. CJK long-tail queries
+# frequently return 0 items upstream (SafeSearch, low-volume keyword, or no
+# advertiser coverage); the hint tells the operator this is upstream silence,
+# not a tool bug, and suggests actionable recovery paths.
+_CJK_RANGES: tuple[tuple[int, int], ...] = (
+    (0x3040, 0x309F),  # Hiragana
+    (0x30A0, 0x30FF),  # Katakana
+    (0x3400, 0x4DBF),  # CJK Ext A
+    (0x4E00, 0x9FFF),  # CJK Unified
+    (0xAC00, 0xD7AF),  # Hangul Syllables
+)
+
+
+def _is_cjk(q: str) -> bool:
+    for ch in q:
+        code = ord(ch)
+        for lo, hi in _CJK_RANGES:
+            if lo <= code <= hi:
+                return True
+    return False
+
 
 def _empty_msg(name: SurfaceName, engine: str) -> str:
     tmpl = _EMPTY_MSG_TEMPLATES.get(name)
@@ -97,6 +118,16 @@ def _empty_msg(name: SurfaceName, engine: str) -> str:
         return "该查询无返回内容"
     label = _ENGINE_LABEL.get(engine, engine)
     return tmpl.format(engine_label=label)
+
+
+def _empty_hint(query: str) -> str | None:
+    """Short actionable hint appended below the EMPTY copy. None if query blank."""
+    q = (query or "").strip()
+    if not q:
+        return None
+    if _is_cjk(q):
+        return "💡 CJK 长尾词常被上游过滤 — 可换成更通用的词、英文同义词，或切另一语言/地区"
+    return "💡 可试更通用的关键字，或换个语言/地区再跑一次"
 
 
 def _full_mode_available() -> bool:
@@ -130,9 +161,17 @@ def _ensure_session_state() -> None:
             info = fetch_quota_info(config.SERPAPI_KEY)
             ss._quota_caption = format_quota_caption(info)
             ss._quota_is_low = is_quota_low(info)
+            left = info.get("plan_searches_left") if isinstance(info, dict) else None
+            total = info.get("searches_per_month") if isinstance(info, dict) else None
+            ss._quota_left = left if isinstance(left, int) else None
+            ss._quota_total = (
+                total if (isinstance(total, int) and total > 0) else None
+            )
         else:
             ss._quota_caption = None
             ss._quota_is_low = False
+            ss._quota_left = None
+            ss._quota_total = None
 
 
 def _boot_engine() -> AnalysisEngine:
@@ -197,12 +236,55 @@ def _drain_progress() -> bool:
     return still_running
 
 
+def _item_text(name: SurfaceName, item) -> str:
+    """Return the comparable lowercased text for a surface item; '' if unknown."""
+    if name == SurfaceName.PAA:
+        raw = getattr(item, "question", "")
+    elif name == SurfaceName.RELATED:
+        raw = getattr(item, "query", "")
+    else:
+        raw = getattr(item, "text", "")
+    return (raw or "").strip().lower()
+
+
+def _build_pair_overlap(
+    g_job: AnalysisJob, b_job: AnalysisJob
+) -> dict[SurfaceName, frozenset[str]]:
+    """Normalized-text overlap between Google and Bing for PAA + Related.
+
+    Returns an empty mapping for surfaces where either side is missing or
+    not status=OK — the callers render no diff badge on non-OK rows, which
+    matches the intent of the feature (compare what both engines actually
+    returned, not what they failed to return).
+    """
+    overlap: dict[SurfaceName, frozenset[str]] = {}
+    for name in (SurfaceName.PAA, SurfaceName.RELATED):
+        g_surface = g_job.surfaces.get(name)
+        b_surface = b_job.surfaces.get(name)
+        if g_surface is None or b_surface is None:
+            continue
+        if g_surface.status != SurfaceStatus.OK or b_surface.status != SurfaceStatus.OK:
+            continue
+        g_texts = {_item_text(name, i) for i in g_surface.items}
+        b_texts = {_item_text(name, i) for i in b_surface.items}
+        g_texts.discard("")
+        b_texts.discard("")
+        overlap[name] = frozenset(g_texts & b_texts)
+    return overlap
+
+
 def _render_pair(g_job: AnalysisJob, b_job: AnalysisJob) -> None:
     """Render a Google + Bing side-by-side comparison view."""
     st.caption(
         f"🔀 对比模式 · query: {g_job.query} · "
         f"{g_job.language}/{g_job.country} · started {g_job.started_at} UTC"
     )
+    overlap = _build_pair_overlap(g_job, b_job)
+    if overlap:
+        # Legend — single line, only shown when we have usable overlap data
+        # on at least one surface. Tells the operator what the 🟰 badge means
+        # without consuming vertical space when the diff is not applicable.
+        st.caption("🟰 = 双方都返回的条目 （未标记 = 仅本侧返回）")
     col_g, col_b = st.columns(2)
     with col_g:
         st.markdown("### 🌐 Google")
@@ -214,7 +296,7 @@ def _render_pair(g_job: AnalysisJob, b_job: AnalysisJob) -> None:
         for i, name in enumerate(present):
             if i > 0:
                 st.divider()
-            _render_surface(g_job, name)
+            _render_surface(g_job, name, overlap_texts=overlap.get(name))
         if g_job.status != JobStatus.RUNNING:
             cols = st.columns(2)
             with cols[0]:
@@ -245,7 +327,7 @@ def _render_pair(g_job: AnalysisJob, b_job: AnalysisJob) -> None:
         for i, name in enumerate(present):
             if i > 0:
                 st.divider()
-            _render_surface(b_job, name)
+            _render_surface(b_job, name, overlap_texts=overlap.get(name))
         if b_job.status != JobStatus.RUNNING:
             cols = st.columns(2)
             with cols[0]:
@@ -268,7 +350,18 @@ def _render_pair(g_job: AnalysisJob, b_job: AnalysisJob) -> None:
                 )
 
 
-def _render_surface(job: AnalysisJob, name: SurfaceName) -> None:
+def _render_surface(
+    job: AnalysisJob,
+    name: SurfaceName,
+    *,
+    overlap_texts: frozenset[str] | None = None,
+) -> None:
+    """Render one surface; when ``overlap_texts`` is provided, each item whose
+    normalized text is in that set gets a 🟰 prefix (used by compare mode).
+
+    ``overlap_texts`` is None outside compare mode — single-job views render
+    no badges.
+    """
     surface = job.surfaces.get(name)
     label = _SURFACE_LABELS[name]
     if surface is None or surface.status == SurfaceStatus.RUNNING:
@@ -282,6 +375,9 @@ def _render_surface(job: AnalysisJob, name: SurfaceName) -> None:
 
     if surface.status == SurfaceStatus.EMPTY:
         st.caption(_empty_msg(name, job.engine))
+        hint = _empty_hint(job.query)
+        if hint:
+            st.caption(hint)
         return
     if surface.status == SurfaceStatus.FAILED:
         msg = _FAILURE_MSG.get(surface.failure_category, "未知失败")
@@ -311,12 +407,18 @@ def _render_surface(job: AnalysisJob, name: SurfaceName) -> None:
             st.markdown(f"{item.rank}. {item.text}")
     elif name == SurfaceName.PAA:
         for item in surface.items:
-            st.markdown(f"**{item.rank}. {item.question}**")
+            prefix = "🟰 " if (
+                overlap_texts and _item_text(name, item) in overlap_texts
+            ) else ""
+            st.markdown(f"**{prefix}{item.rank}. {item.question}**")
             if getattr(item, "answer_preview", ""):
                 st.caption(item.answer_preview)
     elif name == SurfaceName.RELATED:
         for item in surface.items:
-            st.markdown(f"- {item.query}")
+            prefix = "🟰 " if (
+                overlap_texts and _item_text(name, item) in overlap_texts
+            ) else ""
+            st.markdown(f"- {prefix}{item.query}")
 
 
 def _render_history_sidebar() -> None:
@@ -340,9 +442,24 @@ def _render_history_sidebar() -> None:
             ).strip().lower()
             if filter_text:
                 jobs = [j for j in jobs if filter_text in (j.query or "").lower()]
-                if not jobs:
-                    st.caption(f"无匹配 · 过滤词 `{filter_text}`")
-                    return
+
+            # Engine filter — only when the loaded slice mixes engines; a
+            # single-engine history would make the selectbox meaningless.
+            engines_present = sorted({(j.engine or "google") for j in jobs})
+            if len(engines_present) > 1:
+                choice = st.selectbox(
+                    "引擎",
+                    options=["全部", *engines_present],
+                    index=0,
+                    key="_history_engine_filter",
+                    label_visibility="collapsed",
+                )
+                if choice != "全部":
+                    jobs = [j for j in jobs if (j.engine or "google") == choice]
+
+            if not jobs:
+                st.caption("当前过滤下无记录")
+                return
 
         now = datetime.now(timezone.utc)
         groups = {"今天": [], "本周": [], "更早": []}
@@ -496,12 +613,22 @@ def _render_mode_notice() -> None:
     """
     if _full_mode_available():
         st.caption("Full mode · SerpAPI")
-        quota = st.session_state.get("_quota_caption")
+        ss = st.session_state
+        quota = ss.get("_quota_caption")
         if quota:
-            if st.session_state.get("_quota_is_low", False):
+            if ss.get("_quota_is_low", False):
                 st.warning(f"⚠️ {quota} — 配额即将耗尽，慎用 Submit")
             else:
                 st.caption(quota)
+            left = ss.get("_quota_left")
+            total = ss.get("_quota_total")
+            # Progress bar shows *used* fraction — visually intuitive (filled =
+            # spent). Clamp to [0, 1] to stay resilient against edge cases
+            # where the account endpoint returns left > total (shouldn't
+            # happen, but `st.progress` raises on out-of-range).
+            if isinstance(left, int) and isinstance(total, int) and total > 0:
+                used = total - max(0, min(left, total))
+                st.progress(used / total)
     else:
         st.caption(
             "Suggest-only · SERPAPI_KEY 未设置 · 启用 Full mode 见 seoserper/config.py"
