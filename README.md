@@ -36,6 +36,14 @@ streamlit run app.py
 
 Open http://localhost:8501. Pick a locale (English / 简体中文 / 繁體中文 / 日本語), submit a query.
 
+## Screenshots
+
+_Drop a PNG at `docs/screenshot.png` to render here._
+
+<!-- ![SEOSERPER UI](docs/screenshot.png) -->
+
+The default view shows Google + Bing side by side with `🟰` markers on items both engines returned, a quota progress bar at the top, and a filterable history sidebar.
+
 ## Export formats
 
 | Format | Content |
