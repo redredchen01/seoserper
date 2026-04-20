@@ -1,8 +1,12 @@
 # SEOSERPER
 
-Local-first Google SERP analyzer. Pulls **Autocomplete Suggestions**, **People Also Ask**, and **Related Searches** for any query, saves history to SQLite, exports Markdown or CSV.
+[![tests](https://github.com/redredchen01/seoserper/actions/workflows/test.yml/badge.svg)](https://github.com/redredchen01/seoserper/actions/workflows/test.yml)
+[![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](pyproject.toml)
 
-Solo-operator tool, self-use. No account, no cloud, no CI.
+Local-first Google + Bing SERP analyzer. Pulls **Autocomplete Suggestions**, **People Also Ask**, and **Related Searches** for any query, saves history to SQLite, exports Markdown or CSV.
+
+Solo-operator tool, self-use. No account, no cloud — bring your own SerpAPI key (optional, free tier works).
 
 ## Modes
 
@@ -58,3 +62,7 @@ pytest tests/ -q
 ## Plans
 
 Design history lives under `docs/plans/` — active plan is the highest-numbered `status: active` file. Completed plans stay for context.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
