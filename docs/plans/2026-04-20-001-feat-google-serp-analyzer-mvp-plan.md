@@ -516,7 +516,7 @@ flowchart TB
 
 ---
 
-- [ ] **Unit 6: Markdown export 纯函数**
+- [x] **Unit 6: Markdown export 纯函数** (19/19 tests ✓; 3 golden fixture + 市场化中文 failure diagnostic + minimal markdown escape)
 
 **Goal:** `render_analysis_to_md(analysis) -> str` 纯函数 + `build_filename(analysis) -> str`。
 
