@@ -1,0 +1,13 @@
+{
+  "search_metadata": {
+    "id": "fixture-empty-both",
+    "status": "Success"
+  },
+  "search_parameters": {
+    "engine": "google",
+    "q": "xyzzzzz",
+    "hl": "en",
+    "gl": "us"
+  },
+  "organic_results": [{"position": 1, "title": "Nothing", "link": "https://example.com"}]
+}

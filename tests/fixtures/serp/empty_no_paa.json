@@ -1,0 +1,20 @@
+{
+  "search_metadata": {
+    "id": "fixture-empty-paa",
+    "status": "Success"
+  },
+  "search_parameters": {
+    "engine": "google",
+    "q": "xq42zzz nonexistent tail query",
+    "hl": "en",
+    "gl": "us",
+    "google_domain": "google.com"
+  },
+  "organic_results": [
+    {"position": 1, "title": "No results", "link": "https://example.com"}
+  ],
+  "related_searches": [
+    {"query": "broader fallback term"},
+    {"query": "different angle search"}
+  ]
+}

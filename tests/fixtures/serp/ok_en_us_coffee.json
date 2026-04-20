@@ -1,0 +1,66 @@
+{
+  "search_metadata": {
+    "id": "fixture-en-us-coffee",
+    "status": "Success",
+    "google_url": "https://www.google.com/search?q=coffee&hl=en&gl=us",
+    "total_time_taken": 2.31
+  },
+  "search_parameters": {
+    "engine": "google",
+    "q": "coffee",
+    "hl": "en",
+    "gl": "us",
+    "google_domain": "google.com"
+  },
+  "search_information": {
+    "organic_results_state": "Results for exact spelling",
+    "total_results": 1420000000,
+    "time_taken_displayed": 0.42
+  },
+  "organic_results": [
+    {"position": 1, "title": "Coffee - Wikipedia", "link": "https://en.wikipedia.org/wiki/Coffee"},
+    {"position": 2, "title": "Coffee | Starbucks", "link": "https://www.starbucks.com/coffee"}
+  ],
+  "related_questions": [
+    {
+      "question": "What exactly is coffee?",
+      "snippet": "Coffee is a brewed drink prepared from roasted coffee beans, the seeds of berries from certain flowering plants in the Coffea genus.",
+      "title": "Coffee - Wikipedia",
+      "link": "https://en.wikipedia.org/wiki/Coffee"
+    },
+    {
+      "question": "Is coffee good for you?",
+      "snippet": "Moderate coffee consumption (3-4 cups per day) is associated with a lower risk of several chronic diseases.",
+      "title": "Coffee and Health",
+      "link": "https://www.healthline.com/nutrition/coffee-good-or-bad"
+    },
+    {
+      "question": "What are the 4 types of coffee?",
+      "snippet": "The four main types of coffee beans are Arabica, Robusta, Liberica, and Excelsa.",
+      "title": "Coffee Bean Types",
+      "link": "https://example.com/coffee-types"
+    },
+    {
+      "question": "Why do people drink coffee?",
+      "snippet": "People drink coffee primarily for its caffeine content, which provides a temporary boost in alertness and energy.",
+      "title": "Why Coffee",
+      "link": "https://example.com/why-coffee"
+    },
+    {
+      "question": "Is coffee a fruit?",
+      "snippet": "The coffee bean is technically the pit of a fruit called the coffee cherry.",
+      "title": "Coffee Cherry",
+      "link": "https://example.com/coffee-cherry"
+    }
+  ],
+  "related_searches": [
+    {"query": "coffee near me", "link": "https://www.google.com/search?q=coffee+near+me"},
+    {"query": "coffee shop", "link": "https://www.google.com/search?q=coffee+shop"},
+    {"query": "best coffee beans", "link": "https://www.google.com/search?q=best+coffee+beans"},
+    {"query": "coffee health benefits", "link": "https://www.google.com/search?q=coffee+health+benefits"},
+    {"query": "coffee brewing methods", "link": "https://www.google.com/search?q=coffee+brewing+methods"},
+    {"query": "cold brew coffee", "link": "https://www.google.com/search?q=cold+brew+coffee"},
+    {"query": "coffee grinder", "link": "https://www.google.com/search?q=coffee+grinder"},
+    {"query": "arabica vs robusta", "link": "https://www.google.com/search?q=arabica+vs+robusta"}
+  ]
+}

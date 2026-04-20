@@ -1,0 +1,37 @@
+{
+  "search_metadata": {
+    "id": "fixture-ja-jp-ramen",
+    "status": "Success",
+    "total_time_taken": 3.12
+  },
+  "search_parameters": {
+    "engine": "google",
+    "q": "ラーメン 東京",
+    "hl": "ja",
+    "gl": "jp",
+    "google_domain": "google.co.jp"
+  },
+  "organic_results": [
+    {"position": 1, "title": "東京ラーメンおすすめ 2026", "link": "https://example.jp/tokyo-ramen"}
+  ],
+  "related_questions": [
+    {
+      "question": "東京で一番美味しいラーメンは何ですか？",
+      "snippet": "東京の人気ラーメン店には、一蘭、一風堂、AFURI、六厘舎などがあり、好みによって評価が分かれます。",
+      "title": "東京ラーメンランキング",
+      "link": "https://example.jp/ranking"
+    },
+    {
+      "question": "ラーメンのスープの種類は？",
+      "snippet": "代表的なスープは醤油、塩、味噌、豚骨の4種類です。地域によって独自の派生形があります。",
+      "title": "ラーメンスープ",
+      "link": "https://example.jp/soup"
+    }
+  ],
+  "related_searches": [
+    {"query": "ラーメン 新宿"},
+    {"query": "ラーメン 渋谷"},
+    {"query": "つけ麺 東京"},
+    {"query": "東京 家系ラーメン"}
+  ]
+}

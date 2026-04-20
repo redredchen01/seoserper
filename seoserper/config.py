@@ -85,6 +85,9 @@ SOURCE_SERP = "Google Search Playwright"
 # Timeouts
 SUGGEST_TIMEOUT_SECONDS = 5.0
 RENDER_TIMEOUT_SECONDS = 30.0
+# SerpAPI calls include Google-side scraping on the provider's servers, so
+# end-to-end latency is typically 2-6s; 15s leaves headroom for slow months.
+SERPAPI_TIMEOUT_SECONDS = 15.0
 
 # Playwright RSS control — removed in Unit 6 alongside render.py deletion.
 BROWSER_RESTART_AFTER_QUERIES = 50

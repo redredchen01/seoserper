@@ -1,0 +1,45 @@
+{
+  "search_metadata": {
+    "id": "fixture-zh-cn-paobuxie",
+    "status": "Success",
+    "total_time_taken": 2.88
+  },
+  "search_parameters": {
+    "engine": "google",
+    "q": "跑步鞋推荐",
+    "hl": "zh-CN",
+    "gl": "cn",
+    "google_domain": "google.com.hk"
+  },
+  "organic_results": [
+    {"position": 1, "title": "2026 十大跑步鞋推荐", "link": "https://example.com/paobu-1"}
+  ],
+  "related_questions": [
+    {
+      "question": "跑步鞋如何选择？",
+      "snippet": "选择跑步鞋主要看脚型、跑姿、训练目的三个维度。内翻型脚建议选支撑型跑鞋，外翻型脚适合缓震型。",
+      "title": "跑步鞋选购指南",
+      "link": "https://example.com/xuangou"
+    },
+    {
+      "question": "跑步鞋多久换一次？",
+      "snippet": "普通跑步鞋建议在 500-800 公里后更换，以避免中底塌陷造成的受伤风险。",
+      "title": "跑步鞋寿命",
+      "link": "https://example.com/shouming"
+    },
+    {
+      "question": "哪个牌子的跑步鞋最好？",
+      "snippet": "主流品牌包括 Nike、Adidas、亚瑟士 Asics、布鲁克斯 Brooks、索康尼 Saucony，各有强项。",
+      "title": "跑步鞋品牌对比",
+      "link": "https://example.com/pinpai"
+    }
+  ],
+  "related_searches": [
+    {"query": "跑步鞋女"},
+    {"query": "跑步鞋男"},
+    {"query": "亚瑟士跑步鞋"},
+    {"query": "跑步鞋品牌排行榜"},
+    {"query": "耐克跑步鞋"},
+    {"query": "跑步鞋 300 元以内"}
+  ]
+}
