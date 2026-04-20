@@ -104,7 +104,11 @@ def test_submit_creates_job_and_returns_id(db_path):
 
     events = _drain(engine)
     kinds = [e.kind for e in events]
-    assert kinds == ["start", "suggest", "paa", "related", "complete"]
+    # Post Unit A (parallel dispatch): start + complete bookend, but suggest
+    # / paa / related may arrive in any order between them.
+    assert kinds[0] == "start"
+    assert kinds[-1] == "complete"
+    assert set(kinds[1:-1]) == {"suggest", "paa", "related"}
 
     job = get_job(job_id, db_path=db_path)
     assert job.status == JobStatus.COMPLETED
