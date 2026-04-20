@@ -1,0 +1,32 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# runtime artifacts
+*.db
+*.db-wal
+*.db-shm
+seoserper.db*
+
+# spike outputs (kept locally; not checked in — fixtures get curated manually)
+scripts/spike_results.jsonl
+tests/fixtures/serp/**/*.html
+!tests/fixtures/serp/en-us.html
+!tests/fixtures/serp/zh-cn.html
+!tests/fixtures/serp/ja-jp.html
+!tests/fixtures/serp/empty-paa.html
+!tests/fixtures/serp/selector-broken.html
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store

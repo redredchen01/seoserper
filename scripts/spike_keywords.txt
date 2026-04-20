@@ -1,0 +1,23 @@
+# SEOSERPER pre-plan captcha baseline 种子查询清单
+# 格式: <locale>\t<query>
+# locale ∈ en-us / zh-cn / ja-jp
+# 运行: python scripts/spike.py run --limit 5 (每个 burst 跑 5 条随机抽样)
+# 目标: 3 天 × 3 burst/day × 5 query/burst × 4 轮 = 60 query (覆盖 60-query 样本)
+
+en-us	best running shoes
+en-us	how to start a podcast
+en-us	python decorators tutorial
+en-us	seo keyword research tools 2026
+en-us	meal prep ideas for beginners
+
+zh-cn	跑步鞋推荐
+zh-cn	如何开始写作
+zh-cn	python 装饰器教程
+zh-cn	seo 关键词研究工具
+zh-cn	一周健身计划
+
+ja-jp	ランニングシューズ おすすめ
+ja-jp	ポッドキャスト 始め方
+ja-jp	python デコレータ 入門
+ja-jp	seo キーワード ツール
+ja-jp	初心者 筋トレ メニュー
