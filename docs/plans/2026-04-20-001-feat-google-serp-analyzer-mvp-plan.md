@@ -107,7 +107,7 @@ origin: docs/brainstorms/2026-04-20-google-serp-analyzer-requirements.md
 
 | 决策 | 理由 |
 |---|---|
-| 项目路径保持 `/Users/dex/YD 2026/SEOSERPER/`（未移入 `projects/tools/`） | 用户显式创建于此；MVP 后若稳定再迁移为 workspace citizen，不在 MVP 范围 |
+| 项目保持独立仓库（未移入 workspace 子目录） | 显式创建于独立路径；MVP 后若稳定再评估整合策略，不在 MVP 范围 |
 | 复用 claude-crawler 的 **RenderThread 整套架构**（subprocess.Popen + PID + SIGKILL watchdog + atexit + preflight + fake-driven tests） | 已验证 production-ready；SEOSERPER 重写等于重复付学费；origin R9 + warm-resident browser 决策与此范式完全兼容 |
 | **不**使用 WriterThread，改用 `@contextmanager get_connection()` + 短连接 UPDATE | SEOSERPER 单 job 写并发低（1 engine worker × 3 次 UPDATE），WAL + `busy_timeout=5000` 足够；完整 WriterThread 增加线程数和 shutdown 复杂度却不解决实际问题 |
 | `wait_until="domcontentloaded"` + 可选短 wait，**不**用 `networkidle` | claude-crawler 已换过一轮，networkidle 对 Google 这种持续 network 流的页面是 latency tax；R1 要求 ~10 秒 P50 |
@@ -716,11 +716,11 @@ flowchart TB
 ## Sources & References
 
 - **Origin document:** `docs/brainstorms/2026-04-20-google-serp-analyzer-requirements.md`
-- **RenderThread canonical reference:** `/Users/dex/YD 2026/projects/tools/claude-crawler-clean/crawler/core/render.py`
-- **WriterThread reference（SEOSERPER 不用完整版，但参考短连接 UPDATE 模式）:** `/Users/dex/YD 2026/projects/tools/claude-crawler-clean/crawler/core/writer.py`
-- **SQLite + `@contextmanager` + PRAGMA + schema init 模式:** `/Users/dex/YD 2026/projects/tools/claude-crawler-clean/crawler/storage.py` (lines 87-209)
-- **Streamlit main + sidebar + queue drain 模板:** `/Users/dex/YD 2026/projects/tools/claude-crawler-clean/app.py`
-- **Fake-driven render tests:** `/Users/dex/YD 2026/projects/tools/claude-crawler-clean/tests/test_render.py`
-- **Google PAA 容器 selector 参考:** `/Users/dex/YD 2026/seo-content-system/backend/src/services/playwrightSerpProvider.ts:235`
-- **pyproject.toml 模板:** `/Users/dex/YD 2026/projects/tools/claude-crawler-clean/pyproject.toml`
-- **Institutional learnings 源:** `/Users/dex/YD 2026/projects/tools/claude crawler/docs/plans/2026-04-17-002-refactor-crawler-performance-scaling-plan.md` + `2026-04-17-003-refactor-crawler-phase2-remediation-plan.md`
+- **RenderThread canonical reference:** adjacent crawler project — `crawler/core/render.py` (subprocess.Popen + PID + SIGKILL watchdog + preflight pattern)
+- **WriterThread reference:** adjacent crawler project — `crawler/core/writer.py` (short-connection UPDATE pattern; SEOSERPER does not adopt the full writer, only the pattern)
+- **SQLite `@contextmanager` + PRAGMA + schema init pattern:** adjacent crawler project — `crawler/storage.py`
+- **Streamlit main + sidebar + queue drain template:** adjacent crawler project — `app.py`
+- **Fake-driven render tests:** adjacent crawler project — `tests/test_render.py`
+- **Google PAA container selector reference:** adjacent SEO content system — `playwrightSerpProvider.ts`
+- **pyproject.toml template:** adjacent crawler project — `pyproject.toml`
+- **Institutional learnings source:** adjacent crawler project — prior perf / remediation plan docs
