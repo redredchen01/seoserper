@@ -3,6 +3,7 @@ query: python decorators
 language: en
 country: us
 render_mode: suggest-only
+engine: google
 timestamp: 2026-04-20T14:30:00Z
 source_suggest: Google Suggest API
 status_suggestions: ok

@@ -79,6 +79,7 @@ def render_analysis_to_md(analysis: AnalysisJob) -> str:
         f"language: {analysis.language}",
         f"country: {analysis.country}",
         f"render_mode: {analysis.render_mode}",
+        f"engine: {analysis.engine}",
         f"timestamp: {ts_iso}",
         f"source_suggest: {analysis.source_suggest}",
     ]

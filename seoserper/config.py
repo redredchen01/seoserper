@@ -34,6 +34,16 @@ Locale support (Full mode):
   years), (zh, tw) → google.com.tw, (ja, jp) → google.co.jp. Unknown
   locales fall back to google.com.
 
+Engine selection (plan 005):
+
+  The UI exposes a Google / Bing radio; both go through the same
+  ``SERPAPI_KEY`` and share the same monthly quota pool (1 credit per
+  Submit regardless of engine). Bing returns PAA + Related but has no
+  public autocomplete endpoint, so Bing jobs skip the Suggest surface
+  entirely. Bing PAA is opportunistic (~20-40% of queries); when Google
+  returns a non-empty PAA for the same query, Bing may be EMPTY — this
+  is upstream behavior, not a tool issue.
+
 Quota-exhausted behavior:
 
   When the monthly SerpAPI quota runs out, the API returns an error payload

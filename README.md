@@ -8,10 +8,13 @@ Solo-operator tool, self-use. No account, no cloud, no CI.
 
 | Mode | Trigger | Surfaces |
 |------|---------|----------|
-| **Full** | `SERPAPI_KEY` set | Suggestions (free) + PAA + Related (via SerpAPI, 1 search/submit) |
-| **Suggest-only** | `SERPAPI_KEY` unset (default) | Suggestions only — no quota cost |
+| **Full (Google)** | engine=Google + `SERPAPI_KEY` set | Suggestions (free) + PAA + Related (via SerpAPI) — 1 credit/submit |
+| **Suggest-only (Google)** | engine=Google + `SERPAPI_KEY` unset | Suggestions only — 0 credits |
+| **Bing** | engine=Bing + `SERPAPI_KEY` set | PAA + Related (via SerpAPI `engine=bing`) — 1 credit/submit. **No Suggest** — Bing has no public/free autocomplete endpoint. |
 
-SerpAPI free tier is ~100-250 searches/month (depends on your plan — check https://serpapi.com/manage-api-key). No credit card. See `seoserper/config.py` module docstring for the full setup + locale + quota details.
+SerpAPI free tier is ~100-250 searches/month (depends on your plan — check https://serpapi.com/manage-api-key). No credit card. **Google and Bing share the same quota pool.** See `seoserper/config.py` module docstring for the full setup + locale + quota details.
+
+**Note on Bing PAA**: Google returns PAA on ~80% of queries; Bing on ~20-40%. Don't be surprised when Bing's PAA surface is EMPTY — it's upstream behavior, not a tool error.
 
 ## Quick start
 
