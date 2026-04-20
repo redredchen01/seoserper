@@ -1,26 +1,30 @@
 """SEOSERPER — Streamlit UI entry.
 
-Behavior branches on ``config.ENABLE_SERP_RENDER`` (see seoserper/config.py
-module docstring for the full recovery / sunset / kill-criterion checklist):
+Behavior branches on ``config.SERPAPI_KEY`` (see seoserper/config.py module
+docstring for setup + quota + locale notes):
 
-- Flag off (default): Suggest-only mode. One Suggestions section. Muted
-  top-of-page notice. No Chromium subprocess. Preflight failure degrades
-  to a soft info notice (Suggest still runs).
-- Flag on: Full 3-section layout. Playwright RenderThread starts on first
-  Submit. Preflight failure hard-blocks (same as before pivot).
+- Key unset (default): Suggest-only mode. One Suggestions section. Muted
+  top-of-page notice reading ``Suggest-only · SERPAPI_KEY 未设置``.
+- Key set: Full 3-section layout (Suggest + PAA + Related). Top notice
+  reads ``Full mode · SerpAPI``. PAA + Related come from a single
+  ``engine=google`` SerpAPI call per Submit.
+
+Restart required after changing ``SERPAPI_KEY`` — the env var is read once
+at module import in ``seoserper.config``.
 """
 
 from __future__ import annotations
 
 import time
 from datetime import datetime, timezone, timedelta
+from functools import partial
 
 import streamlit as st
 
 from seoserper import config
 from seoserper.core.engine import AnalysisEngine, ProgressEvent
-from seoserper.core.render import RenderThread, preflight
 from seoserper.export import build_filename, render_analysis_to_md
+from seoserper.fetchers.serp import fetch_serp_data
 from seoserper.models import (
     AnalysisJob,
     FailureCategory,
@@ -52,11 +56,15 @@ _SURFACE_LABELS = {
 _FAILURE_MSG = {
     FailureCategory.BLOCKED_BY_CAPTCHA: "Google captcha 拦截 — 稍等几分钟点 Retry",
     FailureCategory.BLOCKED_BY_CONSENT: "Google consent 屏 — 点 Retry 重走",
-    FailureCategory.BLOCKED_RATE_LIMIT: "被限流 — 等 5 分钟点 Retry",
-    FailureCategory.SELECTOR_NOT_FOUND: "页面结构未匹配 (selector drift?)",
-    FailureCategory.NETWORK_ERROR: "网络错误 — 检查连接",
-    FailureCategory.BROWSER_CRASH: "浏览器异常 — Retry 触发重启",
+    FailureCategory.BLOCKED_RATE_LIMIT: "被限流 (SerpAPI 月度配额用尽 或 Suggest 限流) — 重试 或 等 quota 重置",
+    FailureCategory.SELECTOR_NOT_FOUND: "响应结构异常 (provider drift 或 被拦截返回 HTML)",
+    FailureCategory.NETWORK_ERROR: "网络错误 — 检查连接 / API key",
+    FailureCategory.BROWSER_CRASH: "内部异常 — Retry 重试",
 }
+
+
+def _full_mode_available() -> bool:
+    return config.SERPAPI_KEY is not None
 
 
 def _ensure_session_state() -> None:
@@ -65,77 +73,37 @@ def _ensure_session_state() -> None:
         ss._db_path = config.DB_PATH
         init_db(ss._db_path)
         reap_orphaned(db_path=ss._db_path)
-    if "_render_thread" not in ss:
-        ss._render_thread = None
     if "_engine" not in ss:
         ss._engine = None
     if "_current_job_id" not in ss:
         ss._current_job_id = None
     if "_historical_job_id" not in ss:
         ss._historical_job_id = None
-    if "_preflight_ok" not in ss:
-        ok, msg = preflight()
-        ss._preflight_ok = ok
-        ss._preflight_msg = msg
-        # Suggest-only mode degrades preflight failure to a soft notice instead
-        # of hard-blocking — Suggest has no Chromium dependency.
-        ss._preflight_soft_fail = (not ok) and (not config.ENABLE_SERP_RENDER)
 
 
-def _boot_engine() -> AnalysisEngine | None:
+def _boot_engine() -> AnalysisEngine:
     """Lazily build the engine on first Submit.
 
-    Under flag=False (Suggest-only): engine is built with render_thread=None
-    and parse_fn=None; no Chromium subprocess is created. Under flag=True:
-    the original full-mode code path (start RenderThread, wire parser).
-
-    Returns None only when the live flag requires Playwright but preflight
-    failed. Suggest-only never returns None.
+    Under ``SERPAPI_KEY=None`` (Suggest-only): engine is built with
+    ``serp_fn=None``; no provider call is made for PAA/Related. Under
+    ``SERPAPI_KEY=<key>``: engine gets a ``serp_fn`` closure that calls
+    ``fetch_serp_data`` with the key curried in. The key is **never** stored
+    on the engine instance — it's captured inside the closure from config
+    at engine construction time, and the engine object itself has no
+    ``api_key`` attribute.
     """
     ss = st.session_state
     if ss._engine is not None:
         return ss._engine
 
-    if config.ENABLE_SERP_RENDER:
-        # Full mode: require preflight; wire real RenderThread + parser.
-        if not ss._preflight_ok:
-            return None
-        rt = RenderThread()
-        rt.start()
-        ss._render_thread = rt
-        parse_fn = _load_parser_or_stub()
-        ss._engine = AnalysisEngine(
-            render_thread=rt, parse_fn=parse_fn, db_path=ss._db_path
-        )
+    if _full_mode_available():
+        key = config.SERPAPI_KEY
+        # Closure carries the key; engine signature stays (q, l, c).
+        serp_fn = partial(fetch_serp_data, api_key=key)
+        ss._engine = AnalysisEngine(serp_fn=serp_fn, db_path=ss._db_path)
     else:
-        # Suggest-only: no Chromium, no parser.
-        ss._render_thread = None
-        ss._engine = AnalysisEngine(
-            render_thread=None, parse_fn=None, db_path=ss._db_path
-        )
+        ss._engine = AnalysisEngine(serp_fn=None, db_path=ss._db_path)
     return ss._engine
-
-
-def _load_parser_or_stub():
-    try:
-        from seoserper.parsers.serp import parse_serp  # type: ignore
-        return parse_serp
-    except ImportError:
-        from seoserper.models import ParseResult
-
-        def stub(html: str, locale: str):
-            return {
-                SurfaceName.PAA: ParseResult(
-                    status=SurfaceStatus.FAILED,
-                    failure_category=FailureCategory.SELECTOR_NOT_FOUND,
-                ),
-                SurfaceName.RELATED: ParseResult(
-                    status=SurfaceStatus.FAILED,
-                    failure_category=FailureCategory.SELECTOR_NOT_FOUND,
-                ),
-            }
-
-        return stub
 
 
 def _drain_progress() -> bool:
@@ -272,26 +240,23 @@ def _render_current(job: AnalysisJob) -> None:
             if any_failed:
                 if st.button("🔁 重跑失败版位", use_container_width=True):
                     engine = _boot_engine()
-                    if engine is not None:
-                        engine.retry_failed_surfaces(job.id)
-                        st.rerun()
+                    engine.retry_failed_surfaces(job.id)
+                    st.rerun()
 
 
 def _render_mode_notice() -> None:
-    """Top-of-page notice: muted grey, non-dismissible, no config identifier.
+    """Top-of-page notice: muted grey, non-dismissible.
 
-    Stacked-notice rule (design-lens F2): under Suggest-only + preflight fail,
-    render a single merged caption instead of two separate top-of-page lines.
+    Full mode (SERPAPI_KEY set): ``Full mode · SerpAPI``.
+    Suggest-only (SERPAPI_KEY unset): prompt to set the env var; recovery
+    checklist lives in ``seoserper/config.py`` module docstring.
     """
-    ss = st.session_state
-    if config.ENABLE_SERP_RENDER:
-        return
-    if getattr(ss, "_preflight_soft_fail", False):
-        st.caption(
-            "Suggest-only 模式 · 当前网络限速中 · Playwright 未安装但当前模式无需"
-        )
+    if _full_mode_available():
+        st.caption("Full mode · SerpAPI")
     else:
-        st.caption("Suggest-only 模式 · 当前网络限速中")
+        st.caption(
+            "Suggest-only · SERPAPI_KEY 未设置 · 启用 Full mode 见 seoserper/config.py"
+        )
 
 
 def main() -> None:
@@ -300,14 +265,6 @@ def main() -> None:
 
     _ensure_session_state()
     ss = st.session_state
-
-    # Under flag=True, preflight failure is a hard block (full-mode UI
-    # depends on Chromium). Under flag=False, preflight is already degraded
-    # to a soft notice at session-state init and we fall through.
-    if config.ENABLE_SERP_RENDER and not ss._preflight_ok:
-        st.error(ss._preflight_msg)
-        st.info("安装后请刷新页面")
-        return
 
     _render_mode_notice()
 
@@ -325,10 +282,9 @@ def main() -> None:
 
     if submitted and query.strip():
         engine = _boot_engine()
-        if engine is not None:
-            job_id = engine.submit(query.strip(), lang.strip(), country.strip())
-            ss._current_job_id = job_id
-            ss._historical_job_id = None
+        job_id = engine.submit(query.strip(), lang.strip(), country.strip())
+        ss._current_job_id = job_id
+        ss._historical_job_id = None
 
     _render_history_sidebar()
 

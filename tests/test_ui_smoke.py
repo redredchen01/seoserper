@@ -1,109 +1,90 @@
-"""Unit 7 / 4: Streamlit UI smoke — boot, preflight branches, simple flow.
+"""Unit 4: Streamlit UI smoke — boot, mode notice, sidebar, input row.
 
-These are AppTest-based smoke checks; no real browser involved. The engine
-and render thread are monkey-patched so we never touch Playwright.
-
-Behavior differs between Suggest-only (flag=False, default) and full mode
-(flag=True). Each test explicitly sets the flag via monkeypatch.
+AppTest-based smoke checks; no real SerpAPI calls. Behavior differs between
+Suggest-only (``SERPAPI_KEY`` unset, default) and Full mode (``SERPAPI_KEY``
+set). Each test explicitly sets the key via monkeypatch.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 from streamlit.testing.v1 import AppTest
 
 APP_PATH = str(Path(__file__).parent.parent / "app.py")
 
 
-def _patch_preflight(monkeypatch, ok: bool):
-    from seoserper.core import render
-    msg = "" if ok else "Run: playwright install chromium"
-    monkeypatch.setattr(render, "preflight", lambda: (ok, msg))
-
-
-def _set_flag(monkeypatch, enabled: bool):
+def _patch_key(monkeypatch, key: str | None):
     from seoserper import config
-    monkeypatch.setattr(config, "ENABLE_SERP_RENDER", enabled)
+    monkeypatch.setattr(config, "SERPAPI_KEY", key)
 
 
 def _isolate_db(monkeypatch, tmp_path: Path):
-    monkeypatch.setenv("SEOSERPER_DB", str(tmp_path / "ui.db"))
+    """Patch both the env var (for config reload paths) and the module
+    attribute (for already-imported modules reading config.DB_PATH)."""
+    from seoserper import config
+    db_path = str(tmp_path / "ui.db")
+    monkeypatch.setenv("SEOSERPER_DB", db_path)
+    monkeypatch.setattr(config, "DB_PATH", db_path)
 
 
-# --- full mode (ENABLE_SERP_RENDER=True) -------------------------------------
+# --- full mode (SERPAPI_KEY set) --------------------------------------------
 
 
 def test_full_mode_boots_and_renders_title(monkeypatch, tmp_path):
-    _set_flag(monkeypatch, True)
-    _patch_preflight(monkeypatch, True)
+    _patch_key(monkeypatch, "fake-key")
     _isolate_db(monkeypatch, tmp_path)
     at = AppTest.from_file(APP_PATH).run(timeout=10)
     assert not at.exception
     assert any("SEOSERPER" in t.value for t in at.title)
 
 
-def test_full_mode_preflight_failure_hard_blocks(monkeypatch, tmp_path):
-    _set_flag(monkeypatch, True)
-    _patch_preflight(monkeypatch, False)
-    _isolate_db(monkeypatch, tmp_path)
-    at = AppTest.from_file(APP_PATH).run(timeout=10)
-    assert not at.exception
-    errors = [e.value for e in at.error]
-    assert any("playwright install chromium" in e for e in errors), errors
-
-
-def test_full_mode_no_top_notice(monkeypatch, tmp_path):
-    """In full mode, the Suggest-only top-of-page notice must NOT appear."""
-    _set_flag(monkeypatch, True)
-    _patch_preflight(monkeypatch, True)
+def test_full_mode_shows_full_mode_caption(monkeypatch, tmp_path):
+    _patch_key(monkeypatch, "fake-key")
     _isolate_db(monkeypatch, tmp_path)
     at = AppTest.from_file(APP_PATH).run(timeout=10)
     captions = [c.value for c in at.caption]
-    assert not any("Suggest-only 模式" in c for c in captions), captions
+    assert any("Full mode" in c and "SerpAPI" in c for c in captions), captions
+    # Must NOT show the Suggest-only prompt.
+    assert not any("SERPAPI_KEY 未设置" in c for c in captions), captions
 
 
-# --- suggest-only mode (ENABLE_SERP_RENDER=False, default) -------------------
+def test_full_mode_does_not_embed_literal_key_value(monkeypatch, tmp_path):
+    """Security: the UI must never echo the actual key value."""
+    _patch_key(monkeypatch, "super-secret-live-key-xyz")
+    _isolate_db(monkeypatch, tmp_path)
+    at = AppTest.from_file(APP_PATH).run(timeout=10)
+    captions = [c.value for c in at.caption]
+    for c in captions:
+        assert "super-secret-live-key-xyz" not in c, c
+
+
+# --- suggest-only mode (SERPAPI_KEY unset) ----------------------------------
 
 
 def test_suggest_only_boots_and_renders_title(monkeypatch, tmp_path):
-    _set_flag(monkeypatch, False)
-    _patch_preflight(monkeypatch, True)
+    _patch_key(monkeypatch, None)
     _isolate_db(monkeypatch, tmp_path)
     at = AppTest.from_file(APP_PATH).run(timeout=10)
     assert not at.exception
     assert any("SEOSERPER" in t.value for t in at.title)
 
 
-def test_suggest_only_shows_top_notice(monkeypatch, tmp_path):
-    _set_flag(monkeypatch, False)
-    _patch_preflight(monkeypatch, True)
+def test_suggest_only_shows_setup_caption(monkeypatch, tmp_path):
+    _patch_key(monkeypatch, None)
     _isolate_db(monkeypatch, tmp_path)
     at = AppTest.from_file(APP_PATH).run(timeout=10)
     captions = [c.value for c in at.caption]
-    assert any("Suggest-only 模式" in c for c in captions), captions
-    # Must NOT embed the config identifier
-    assert not any("ENABLE_SERP_RENDER" in c for c in captions), captions
+    assert any("Suggest-only" in c for c in captions), captions
+    assert any("SERPAPI_KEY" in c for c in captions), captions
+    assert any("config.py" in c for c in captions), captions
 
 
-def test_suggest_only_preflight_failure_soft_warning(monkeypatch, tmp_path):
-    """Suggest has no Chromium dep — preflight failure degrades to a notice."""
-    _set_flag(monkeypatch, False)
-    _patch_preflight(monkeypatch, False)
+def test_suggest_only_submit_button_still_enabled(monkeypatch, tmp_path):
+    """Suggest-only is a real working mode — Submit must not be disabled."""
+    _patch_key(monkeypatch, None)
     _isolate_db(monkeypatch, tmp_path)
     at = AppTest.from_file(APP_PATH).run(timeout=10)
-    assert not at.exception
-    # No hard-block error (that's full-mode behavior)
-    errors = [e.value for e in at.error]
-    assert not any("playwright install chromium" in e for e in errors), errors
-    # Merged caption mentions both the mode AND Playwright missing
-    captions = [c.value for c in at.caption]
-    assert any(
-        "Suggest-only 模式" in c and "Playwright 未安装但当前模式无需" in c
-        for c in captions
-    ), captions
-    # Submit button still renders (not disabled / absent)
     submit_buttons = [b for b in at.button if b.label == "Submit"]
     assert len(submit_buttons) == 1
 
@@ -112,8 +93,7 @@ def test_suggest_only_preflight_failure_soft_warning(monkeypatch, tmp_path):
 
 
 def test_app_shows_empty_history_message(monkeypatch, tmp_path):
-    _set_flag(monkeypatch, False)
-    _patch_preflight(monkeypatch, True)
+    _patch_key(monkeypatch, None)
     _isolate_db(monkeypatch, tmp_path)
     at = AppTest.from_file(APP_PATH).run(timeout=10)
     assert not at.exception
@@ -121,9 +101,16 @@ def test_app_shows_empty_history_message(monkeypatch, tmp_path):
     assert any("暂无历史" in c for c in captions), captions
 
 
+def test_app_shows_empty_history_message_in_full_mode(monkeypatch, tmp_path):
+    _patch_key(monkeypatch, "fake-key")
+    _isolate_db(monkeypatch, tmp_path)
+    at = AppTest.from_file(APP_PATH).run(timeout=10)
+    captions = [c.value for c in at.sidebar.caption]
+    assert any("暂无历史" in c for c in captions), captions
+
+
 def test_app_renders_input_row(monkeypatch, tmp_path):
-    _set_flag(monkeypatch, False)
-    _patch_preflight(monkeypatch, True)
+    _patch_key(monkeypatch, None)
     _isolate_db(monkeypatch, tmp_path)
     at = AppTest.from_file(APP_PATH).run(timeout=10)
     assert not at.exception
