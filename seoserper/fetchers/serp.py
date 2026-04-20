@@ -57,6 +57,24 @@ _GOOGLE_DOMAIN: dict[tuple[str, str], str] = {
     ("ja-JP", "jp"): "google.co.jp",
 }
 
+# Bing market codes (plan 005 Unit 2). Keys mirror _GOOGLE_DOMAIN casing
+# variants so the UI's (lang, country) passes through regardless of how
+# the locale string was normalized upstream. Unknown locales fall back to
+# en-US per Bing docs default — SerpAPI also accepts an omitted mkt param
+# but falling back to en-US keeps results deterministic.
+_BING_MKT: dict[tuple[str, str], str] = {
+    ("en", "us"): "en-US",
+    ("en-US", "us"): "en-US",
+    ("zh", "cn"): "zh-CN",
+    ("zh-CN", "cn"): "zh-CN",
+    ("zh-cn", "cn"): "zh-CN",
+    ("zh", "tw"): "zh-TW",
+    ("zh-TW", "tw"): "zh-TW",
+    ("zh-tw", "tw"): "zh-TW",
+    ("ja", "jp"): "ja-JP",
+    ("ja-JP", "jp"): "ja-JP",
+}
+
 # SerpAPI quota-exhausted substrings we've observed in live payloads / docs.
 # Listed as lowercase needles; payload is lower()'d before match.
 _QUOTA_EXHAUSTED_NEEDLES = (
@@ -71,6 +89,34 @@ _QUOTA_EXHAUSTED_NEEDLES = (
 def _resolve_domain(lang: str, country: str) -> str:
     key = (lang, country.lower() if isinstance(country, str) else country)
     return _GOOGLE_DOMAIN.get(key, "google.com")
+
+
+def _resolve_bing_mkt(lang: str, country: str) -> str:
+    key = (lang, country.lower() if isinstance(country, str) else country)
+    return _BING_MKT.get(key, "en-US")
+
+
+def _build_engine_params(
+    query: str, lang: str, country: str, api_key: str, engine: str
+) -> dict[str, str]:
+    """Per-engine SerpAPI param builder. google = hl+gl+google_domain; bing = mkt.
+
+    Query param stays 'q' for both engines (SerpAPI convention; Yandex would
+    be 'text' but Yandex is out of scope per plan 005).
+    """
+    base = {"engine": engine, "q": query, "api_key": api_key, "no_cache": "false"}
+    if engine == "bing":
+        base["mkt"] = _resolve_bing_mkt(lang, country)
+        return base
+    # Default: google
+    base.update(
+        {
+            "hl": lang,
+            "gl": country,
+            "google_domain": _resolve_domain(lang, country),
+        }
+    )
+    return base
 
 
 def _both_failed(category: FailureCategory) -> dict[SurfaceName, ParseResult]:
@@ -150,6 +196,7 @@ def fetch_serp_raw(
     country: str,
     *,
     api_key: str,
+    engine: str = "google",
     timeout: float = config.SERPAPI_TIMEOUT_SECONDS,
 ) -> tuple[dict | None, FailureCategory | None]:
     """Call SerpAPI and return the raw parsed JSON dict or a FailureCategory.
@@ -158,18 +205,10 @@ def fetch_serp_raw(
       - (dict, None)    on HTTP 200 with valid JSON shape and no error field
       - (None, category) on any failure mode (HTTP, JSON, quota, shape)
 
-    Extracted from fetch_serp_data so the cache wrapper (Unit B) can store
-    the raw payload and replay extraction later even if extract logic shifts.
+    ``engine`` dispatches param construction: google uses hl+gl+google_domain;
+    bing uses mkt. The HTTP/JSON/error handling is identical across engines.
     """
-    params = {
-        "engine": "google",
-        "q": query,
-        "hl": lang,
-        "gl": country,
-        "google_domain": _resolve_domain(lang, country),
-        "api_key": api_key,
-        "no_cache": "false",
-    }
+    params = _build_engine_params(query, lang, country, api_key, engine)
 
     try:
         resp = requests.get(config.SERPAPI_URL, params=params, timeout=timeout)
@@ -223,6 +262,7 @@ def fetch_serp_data(
     country: str,
     *,
     api_key: str,
+    engine: str = "google",
     timeout: float = config.SERPAPI_TIMEOUT_SECONDS,
 ) -> dict[SurfaceName, ParseResult]:
     """Uncached single-call fetch. Composes fetch_serp_raw + extract_surfaces.
@@ -230,11 +270,15 @@ def fetch_serp_data(
     Never raises. All error conditions map to per-surface FAILED ParseResults.
     The engine treats this function exactly like the former ``parse_fn`` it
     replaced, so upstream code at ``_apply_parsed_surface`` is unchanged.
+
+    ``engine`` selects Google vs Bing; response parsing is shared (both
+    engines expose ``related_questions`` + ``related_searches`` keys on
+    SerpAPI, though Bing's PAA is opportunistic ~20-40% of queries).
     """
     payload, failure = fetch_serp_raw(
-        query, lang, country, api_key=api_key, timeout=timeout
+        query, lang, country, api_key=api_key, engine=engine, timeout=timeout
     )
     if failure is not None:
         return _both_failed(failure)
-    assert payload is not None  # invariant: exactly one is None
+    assert payload is not None
     return extract_surfaces(payload, query=query)

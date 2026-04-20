@@ -371,3 +371,99 @@ def test_all_return_values_are_parseresult_instances():
         result = fetch_serp_data("coffee", "en", "us", api_key="fake-key")
     for surface in (SurfaceName.PAA, SurfaceName.RELATED):
         assert isinstance(result[surface], ParseResult)
+
+
+# --- Bing engine (plan 005 Unit 2) -------------------------------------------
+
+from seoserper.fetchers.serp import _BING_MKT, _resolve_bing_mkt, _build_engine_params
+
+
+def test_bing_happy_path_returns_paa_and_related():
+    body = (FIXTURES / "ok_bing_en_us_coffee.json").read_text()
+    with _patched_get(_response(200, body)):
+        result = fetch_serp_data(
+            "coffee", "en", "us", api_key="fake-key", engine="bing"
+        )
+    assert result[SurfaceName.PAA].status == SurfaceStatus.OK
+    assert len(result[SurfaceName.PAA].items) == 2
+    assert result[SurfaceName.PAA].items[0].question.startswith("What are the health")
+    assert result[SurfaceName.RELATED].status == SurfaceStatus.OK
+    assert len(result[SurfaceName.RELATED].items) == 7
+
+
+@pytest.mark.parametrize(
+    "lang,country,expected_mkt",
+    [
+        ("en", "us", "en-US"),
+        ("en-US", "us", "en-US"),
+        ("zh", "cn", "zh-CN"),
+        ("zh-CN", "cn", "zh-CN"),
+        ("zh", "tw", "zh-TW"),
+        ("ja", "jp", "ja-JP"),
+        ("ja-JP", "jp", "ja-JP"),
+        ("fr", "fr", "en-US"),  # unknown → en-US fallback
+        ("de", "de", "en-US"),
+    ],
+)
+def test_bing_locale_to_mkt_mapping(lang, country, expected_mkt):
+    assert _resolve_bing_mkt(lang, country) == expected_mkt
+
+
+def test_bing_params_include_mkt_not_hl_gl():
+    """Bing dispatches to mkt=; no google_domain/hl/gl in the params."""
+    params = _build_engine_params("q", "zh-CN", "cn", "k", "bing")
+    assert params["engine"] == "bing"
+    assert params["mkt"] == "zh-CN"
+    assert "google_domain" not in params
+    assert "hl" not in params
+    assert "gl" not in params
+
+
+def test_google_params_unchanged_when_engine_default():
+    """Regression: google params still built correctly."""
+    params = _build_engine_params("q", "en", "us", "k", "google")
+    assert params["engine"] == "google"
+    assert params["hl"] == "en"
+    assert params["gl"] == "us"
+    assert params["google_domain"] == "google.com"
+    assert "mkt" not in params
+
+
+def test_bing_empty_paa_still_cacheable_shape():
+    """When Bing's response omits related_questions (common), PAA is EMPTY not FAILED."""
+    body = (
+        '{"search_metadata": {"status": "Success"}, '
+        '"search_parameters": {"engine": "bing", "q": "q", "mkt": "en-US"}, '
+        '"organic_results": [], '
+        '"related_searches": [{"query": "fallback"}]}'
+    )
+    with _patched_get(_response(200, body)):
+        result = fetch_serp_data("q", "en", "us", api_key="fake-key", engine="bing")
+    assert result[SurfaceName.PAA].status == SurfaceStatus.EMPTY
+    assert result[SurfaceName.RELATED].status == SurfaceStatus.OK
+
+
+def test_bing_429_flags_rate_limit_same_as_google():
+    with _patched_get(_response(429, "{}")):
+        result = fetch_serp_data("q", "en", "us", api_key="fake-key", engine="bing")
+    for surface in (SurfaceName.PAA, SurfaceName.RELATED):
+        assert result[surface].failure_category == FailureCategory.BLOCKED_RATE_LIMIT
+
+
+def test_bing_params_flow_through_to_request():
+    captured = {}
+
+    def fake_get(url, **kwargs):
+        captured["url"] = url
+        captured["params"] = kwargs.get("params")
+        return _response(
+            200,
+            '{"related_questions": [{"question":"q?","snippet":"s"}], '
+            '"related_searches": [{"query":"r"}]}',
+        )
+
+    with patch("seoserper.fetchers.serp.requests.get", side_effect=fake_get):
+        fetch_serp_data("coffee", "ja", "jp", api_key="fake-key", engine="bing")
+    assert captured["params"]["engine"] == "bing"
+    assert captured["params"]["mkt"] == "ja-JP"
+    assert captured["params"]["q"] == "coffee"

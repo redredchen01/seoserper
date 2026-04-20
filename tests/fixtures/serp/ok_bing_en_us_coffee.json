@@ -1,0 +1,38 @@
+{
+  "search_metadata": {
+    "id": "fixture-bing-en-us-coffee",
+    "status": "Success",
+    "total_time_taken": 1.92
+  },
+  "search_parameters": {
+    "engine": "bing",
+    "q": "coffee",
+    "mkt": "en-US"
+  },
+  "search_information": {
+    "total_results": 982000000
+  },
+  "organic_results": [
+    {"position": 1, "title": "Coffee - Wikipedia", "link": "https://en.wikipedia.org/wiki/Coffee"},
+    {"position": 2, "title": "Best Coffee Shops Near You", "link": "https://www.yelp.com/search?find_desc=coffee"}
+  ],
+  "related_questions": [
+    {
+      "question": "What are the health benefits of coffee?",
+      "snippet": "Moderate coffee intake is linked to reduced risk of type-2 diabetes and certain cancers."
+    },
+    {
+      "question": "How much caffeine is in a cup of coffee?",
+      "snippet": "A typical 8-oz cup of brewed coffee contains around 95 mg of caffeine."
+    }
+  ],
+  "related_searches": [
+    {"query": "best coffee beans 2026"},
+    {"query": "coffee brewing methods"},
+    {"query": "caffeine content comparison"},
+    {"query": "coffee vs tea"},
+    {"query": "specialty coffee shops"},
+    {"query": "home coffee setup"},
+    {"query": "coffee grinder reviews"}
+  ]
+}
