@@ -196,7 +196,7 @@ def test_history_filter_no_match_shows_caption(monkeypatch, tmp_path):
     assert any("无匹配" in c and "xxyyzz" in c for c in captions), captions
 
 
-def test_engine_radio_renders_with_google_and_bing(monkeypatch, tmp_path):
+def test_engine_radio_renders_three_options_with_compare_default(monkeypatch, tmp_path):
     _patch_key(monkeypatch, "fake-key")
     _isolate_db(monkeypatch, tmp_path)
     _stub_quota(monkeypatch, "SerpAPI 剩余 87/100")
@@ -204,9 +204,9 @@ def test_engine_radio_renders_with_google_and_bing(monkeypatch, tmp_path):
     radios = [r for r in at.radio if r.label == "搜索引擎"]
     assert len(radios) == 1
     options = list(radios[0].options)
-    assert options == ["Google", "Bing"]
-    # Default should be Google (index 0)
-    assert radios[0].value == "Google"
+    # Plan 006 Unit 1: compare mode is new default (index 0).
+    assert options == ["Google + Bing 对比", "Google", "Bing"]
+    assert radios[0].value == "Google + Bing 对比"
 
 
 def test_engine_radio_present_in_suggest_only_mode_too(monkeypatch, tmp_path):
@@ -216,6 +216,56 @@ def test_engine_radio_present_in_suggest_only_mode_too(monkeypatch, tmp_path):
     at = AppTest.from_file(APP_PATH).run(timeout=10)
     radios = [r for r in at.radio if r.label == "搜索引擎"]
     assert len(radios) == 1
+
+
+def test_compare_submit_creates_two_jobs(monkeypatch, tmp_path):
+    """Default compare-mode Submit creates 2 job rows (google + bing)."""
+    _patch_key(monkeypatch, "fake-key")
+    _isolate_db(monkeypatch, tmp_path)
+    _stub_quota(monkeypatch, "SerpAPI 剩余 87/100")
+
+    # Stub the engine's underlying serp_fn so no real HTTP fires.
+    from seoserper.models import ParseResult, SurfaceName, SurfaceStatus
+    def fake_serp(q, l, c, *, engine="google"):
+        return {
+            SurfaceName.PAA: ParseResult(status=SurfaceStatus.OK, items=[]),
+            SurfaceName.RELATED: ParseResult(status=SurfaceStatus.OK, items=[]),
+        }
+    # Patch the fetcher the app wires via partial.
+    import seoserper.fetchers.serp_cache as _sc
+    monkeypatch.setattr(_sc, "fetch_serp_data_cached", fake_serp)
+    import app as _app
+    monkeypatch.setattr(_app, "fetch_serp_data_cached", fake_serp)
+
+    # Stub the suggest fetcher too.
+    from seoserper.fetchers.suggest import SuggestResult
+    import seoserper.core.engine as _eng
+    monkeypatch.setattr(
+        _eng, "fetch_suggestions",
+        lambda q, l, c: SuggestResult(status=SurfaceStatus.EMPTY),
+    )
+
+    at = AppTest.from_file(APP_PATH).run(timeout=10)
+    # Compare is default — just type a query + click Submit.
+    [i for i in at.text_input if i.label == "关键字"][0].set_value("coffee").run(timeout=10)
+    [b for b in at.button if b.label == "Submit"][0].click().run(timeout=10)
+
+    # Two jobs should now exist in the isolated DB.
+    from seoserper.storage import list_recent_jobs
+    import time as _time
+    # list_recent_jobs excludes running jobs — wait for both to complete.
+    deadline = _time.monotonic() + 3.0
+    jobs = []
+    while _time.monotonic() < deadline:
+        jobs = list_recent_jobs(db_path=str(tmp_path / "ui.db"))
+        if len(jobs) >= 2:
+            break
+        _time.sleep(0.1)
+
+    engines_seen = {j.engine for j in jobs}
+    assert "google" in engines_seen and "bing" in engines_seen, (
+        f"expected both engines among completed jobs; saw {[j.engine for j in jobs]}"
+    )
 
 
 def test_bing_job_renders_no_suggest_advisory_caption(monkeypatch, tmp_path):

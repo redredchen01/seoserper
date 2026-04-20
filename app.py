@@ -117,6 +117,11 @@ def _ensure_session_state() -> None:
         ss._historical_job_id = None
     if "_delete_armed_job_id" not in ss:
         ss._delete_armed_job_id = None
+    if "_pair_job_ids" not in ss:
+        # (google_job_id, bing_job_id) when the last submit was compare-mode.
+        # Set to None when the user loads a single historical row or submits
+        # single-engine.
+        ss._pair_job_ids = None
     if "_quota_caption" not in ss:
         # One-shot quota lookup per Streamlit session — the dashboard at
         # https://serpapi.com/manage-api-key is the source of truth for exact
@@ -411,17 +416,24 @@ def main() -> None:
 
     _render_mode_notice()
 
-    # Engine selector — horizontal radio, Google default. Bing only shows the
-    # extra caption about no-Suggest after a job lands; doesn't gate the input.
+    # Engine selector — horizontal radio, "Google + Bing 对比" (compare) default.
+    # Compare mode fires 2 parallel engine submits (2 credits per Submit)
+    # and renders both side-by-side. Single-engine options stay for
+    # credit-conscious or single-provider analysis.
     engine_choice = st.radio(
         "搜索引擎",
-        options=["Google", "Bing"],
+        options=["Google + Bing 对比", "Google", "Bing"],
+        index=0,
         horizontal=True,
         key="_engine_input",
-        help="Google: 3 版位 (Suggest + PAA + Related)。Bing: 2 版位 (PAA + Related)，无 autocomplete。"
-             " 两者共享同一个 SerpAPI 配额池。",
+        help="默认对比模式：1 次 Submit 消耗 2 credits（Google + Bing 各 1）。"
+             " 单引擎模式 1 credit。Bing 无公开 autocomplete，没有 Suggestions 版位。",
     )
-    engine_value = "bing" if engine_choice == "Bing" else "google"
+    engine_value = {
+        "Google + Bing 对比": "both",
+        "Google": "google",
+        "Bing": "bing",
+    }[engine_choice]
 
     # Input row
     cols = st.columns([4, 2, 1])
@@ -453,19 +465,30 @@ def main() -> None:
 
     lang, country, _label = locale
     if submitted and query.strip():
-        if bypass_cache and _full_mode_available():
-            # Pre-invalidate the exact key so the downstream cached wrapper
-            # misses → live SerpAPI call → stores fresh row.
-            cache_invalidate(
-                _cache_key(query.strip(), lang, country, engine_value),
-                db_path=ss._db_path,
-            )
-        engine = _boot_engine()
-        job_id = engine.submit(
-            query.strip(), lang, country, engine=engine_value
-        )
-        ss._current_job_id = job_id
-        ss._historical_job_id = None
+        eng = _boot_engine()
+        q = query.strip()
+        if engine_value == "both":
+            # Pre-invalidate BOTH engine cache keys if user ticked bypass.
+            if bypass_cache and _full_mode_available():
+                for e in ("google", "bing"):
+                    cache_invalidate(
+                        _cache_key(q, lang, country, e), db_path=ss._db_path
+                    )
+            g_id = eng.submit(q, lang, country, engine="google")
+            b_id = eng.submit(q, lang, country, engine="bing")
+            ss._pair_job_ids = (g_id, b_id)
+            ss._current_job_id = g_id  # primary for single-fallback paths
+            ss._historical_job_id = None
+        else:
+            if bypass_cache and _full_mode_available():
+                cache_invalidate(
+                    _cache_key(q, lang, country, engine_value),
+                    db_path=ss._db_path,
+                )
+            job_id = eng.submit(q, lang, country, engine=engine_value)
+            ss._current_job_id = job_id
+            ss._historical_job_id = None
+            ss._pair_job_ids = None  # single-submit clears any prior pair
 
     _render_history_sidebar()
 
