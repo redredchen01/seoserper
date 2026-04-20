@@ -1,0 +1,8 @@
+# CSV golden fixtures use RFC 4180 \r\n line endings — git must preserve
+# them across platforms, otherwise the byte-equal test breaks on Windows
+# checkouts or under core.autocrlf=input.
+tests/fixtures/export/*.csv -text
+
+# Markdown goldens are LF-only; standard text handling is fine but be
+# explicit to survive any system autocrlf surprises.
+tests/fixtures/export/*.md text eol=lf
