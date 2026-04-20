@@ -1,48 +1,50 @@
-"""Runtime configuration: DB path, timeouts, supported locales, restart thresholds.
+"""Runtime configuration: DB path, timeouts, supported locales, SerpAPI key.
 
 ======================================================================
-ENABLE_SERP_RENDER — re-enabling the full Playwright pipeline
+SERPAPI_KEY — enabling Full 3-surface mode (Suggest + PAA + Related)
 ======================================================================
 
-SEOSERPER ships in a Suggest-only mode by default (``ENABLE_SERP_RENDER=False``).
-The Google ``/search`` endpoint rate-limits aggressively from the home IP that
-was used during the 2026-04-20 spike (100% /sorry redirect rate, see
-``scripts/spike_results.jsonl``), so PAA + Related surfaces are disabled at
-the engine boundary. The Suggest endpoint (``suggestqueries.google.com``) was
-validated empirically on the same IP at 30/30 ok (see
-``scripts/suggest_baseline.jsonl``) and remains the active data source.
+SEOSERPER ships in Suggest-only mode when ``SERPAPI_KEY`` is unset (the
+default). One Submit in that state yields a single Suggestions surface from
+``suggestqueries.google.com`` (free, no auth, empirically validated at 30/30
+ok on 2026-04-20). PAA + Related Searches require a SerpAPI key; Google has
+no first-party API that returns those surfaces, and the 2026-04-20 Playwright
+spike showed 5/5 ``/sorry/index`` redirects from the home IP, confirming that
+direct HTML scraping of ``google.com/search`` is not viable from this network.
 
-To re-enable the Playwright pipeline:
+To enable Full mode (Suggest + PAA + Related):
 
-  1. ``export SEOSERPER_ENABLE_SERP_RENDER=1`` in the shell before starting
-     Streamlit (accepted truthy values: ``1``, ``true``, ``yes``, ``on``,
-     case-insensitive). Or edit the module-level ``ENABLE_SERP_RENDER``
-     constant below directly.
-  2. **Restart Streamlit.** The env var is read at module import time, which
-     means the Streamlit process must be fully restarted (Ctrl-C, then
-     ``streamlit run app.py`` again). Hot-reload will not pick up the change.
+  1. Sign up at https://serpapi.com — the free tier is 100 searches/month,
+     no credit card required. One Full analysis costs exactly 1 SerpAPI
+     search (PAA + Related come bundled in a single ``engine=google`` call).
+  2. ``export SERPAPI_KEY=<your-key>`` in the shell before starting
+     Streamlit. Empty-string and whitespace-only values are treated as
+     unset; the key is stripped before use.
+  3. **Restart Streamlit.** The env var is read at module import time, so
+     hot-reload will not pick up the change. ``Ctrl-C`` then
+     ``streamlit run app.py`` again.
 
-Reactivation prerequisites (flipping the flag alone is NOT sufficient):
+Locale support (Full mode):
 
-  - A network where ``https://www.google.com/search`` is not redirected to
-     ``/sorry/index``. Re-run ``python scripts/spike.py run --limit 5`` to
-     confirm before relying on the feature.
-  - Unit 4 parser implementation (``seoserper/parsers/serp.py``) must exist;
-     it is currently unshipped. Without it, PAA + Related surfaces will fall
-     through to the ``selector_not_found`` stub and render as failed.
+  SerpAPI ``google_domain`` is set per locale: (en, us) → google.com,
+  (zh, cn) → google.com.hk (mainland google.cn has been redirected for
+  years), (zh, tw) → google.com.tw, (ja, jp) → google.co.jp. Unknown
+  locales fall back to google.com.
 
-Kill criterion (Suggest SPOF):
+Quota-exhausted behavior:
 
-  If ``jobs.overall_status='failed'`` exceeds 20% across any rolling 20-query
-  window, assume the IP's Suggest budget is also flagged and stop using the
-  tool. SEOSERPER has no engineered fallback short of network switching.
+  When the monthly SerpAPI quota runs out, the API returns an error payload
+  that we map to ``FailureCategory.BLOCKED_RATE_LIMIT``. PAA + Related
+  surfaces fail with that category; the Suggest surface (a different
+  provider) is unaffected, so the overall job still completes with at
+  least one ok surface. Wait until month rollover or upgrade to a paid
+  tier at https://serpapi.com/pricing.
 
-Sunset 2026-07-19:
+Secrets hygiene:
 
-  ``tests/test_sunset.py`` fails on 2026-07-19 to force an explicit extend-
-  or-delete decision on the dormant Unit 3 / Unit 5 code. If the flag has
-  stayed False the whole time, delete; if the user actively uses full mode,
-  extend by bumping the date.
+  ``SERPAPI_KEY`` is read **only** from the environment — never from a
+  file, never from SQLite, never logged. The UI exposes only a boolean
+  "configured / not configured" state derived from this module.
 """
 
 from __future__ import annotations
@@ -54,18 +56,19 @@ ROOT = Path(__file__).resolve().parent.parent
 DB_PATH = os.environ.get("SEOSERPER_DB", str(ROOT / "seoserper.db"))
 
 
-def _coerce_flag(value: str | None) -> bool:
-    """Env-var truthy coercion. Accepts 1/true/yes/on (case-insensitive); rest is False."""
+def _coerce_key(value: str | None) -> str | None:
+    """SerpAPI key coerce: None / empty / whitespace-only → None; else stripped value."""
     if value is None:
-        return False
-    return value.strip().lower() in {"1", "true", "yes", "on"}
+        return None
+    stripped = value.strip()
+    return stripped or None
 
 
-# Gate for the Playwright render pipeline. See module docstring for the full
-# recovery checklist, kill criterion, and sunset. Env var is read once at
-# import; attribute-level writes from tests / monkeypatch propagate to the
-# next engine.submit call.
-ENABLE_SERP_RENDER: bool = _coerce_flag(os.environ.get("SEOSERPER_ENABLE_SERP_RENDER"))
+# When set, the engine activates Full mode (PAA + Related via SerpAPI). When
+# None (default), the engine operates in Suggest-only mode. Read once at
+# import; flipping the env var requires a Streamlit restart.
+SERPAPI_KEY: str | None = _coerce_key(os.environ.get("SERPAPI_KEY"))
+SERPAPI_URL: str = "https://serpapi.com/search.json"
 
 # MVP-scope locales (plan §Key Decisions). Other locales work but quality is unwarranted.
 SUPPORTED_LOCALES: tuple[tuple[str, str], ...] = (
@@ -75,6 +78,7 @@ SUPPORTED_LOCALES: tuple[tuple[str, str], ...] = (
 )
 
 # Source labels — surfaced in MD export frontmatter and UI metadata bar (R5).
+# Unit 5 updates SOURCE_SERP to reflect the SerpAPI provider.
 SOURCE_SUGGEST = "Google Suggest API"
 SOURCE_SERP = "Google Search Playwright"
 
@@ -82,7 +86,7 @@ SOURCE_SERP = "Google Search Playwright"
 SUGGEST_TIMEOUT_SECONDS = 5.0
 RENDER_TIMEOUT_SECONDS = 30.0
 
-# Playwright RSS control (plan §Key Decisions "restart policy").
+# Playwright RSS control — removed in Unit 6 alongside render.py deletion.
 BROWSER_RESTART_AFTER_QUERIES = 50
 BROWSER_RESTART_AFTER_SECONDS = 3600
 

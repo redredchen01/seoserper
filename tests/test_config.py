@@ -1,42 +1,63 @@
-"""Config surface: ENABLE_SERP_RENDER env-var coercion."""
+"""Config surface: SERPAPI_KEY env-var coercion + legacy flag removal."""
 
 from __future__ import annotations
 
 import importlib
-
-import pytest
 
 from seoserper import config
 
 
 def _reload_with_env(monkeypatch, value: str | None):
     if value is None:
-        monkeypatch.delenv("SEOSERPER_ENABLE_SERP_RENDER", raising=False)
+        monkeypatch.delenv("SERPAPI_KEY", raising=False)
     else:
-        monkeypatch.setenv("SEOSERPER_ENABLE_SERP_RENDER", value)
+        monkeypatch.setenv("SERPAPI_KEY", value)
     return importlib.reload(config)
 
 
-def test_unset_env_yields_false(monkeypatch):
+def test_unset_env_yields_none(monkeypatch):
     reloaded = _reload_with_env(monkeypatch, None)
-    assert reloaded.ENABLE_SERP_RENDER is False
+    assert reloaded.SERPAPI_KEY is None
 
 
-@pytest.mark.parametrize("value", ["1", "true", "TRUE", "True", "yes", "YES", "on", "ON"])
-def test_truthy_values_yield_true(monkeypatch, value):
-    reloaded = _reload_with_env(monkeypatch, value)
-    assert reloaded.ENABLE_SERP_RENDER is True
+def test_nonempty_value_round_trips(monkeypatch):
+    reloaded = _reload_with_env(monkeypatch, "abc123")
+    assert reloaded.SERPAPI_KEY == "abc123"
 
 
-@pytest.mark.parametrize("value", ["0", "false", "FALSE", "", "maybe", "2", "no", "off"])
-def test_falsy_values_yield_false(monkeypatch, value):
-    reloaded = _reload_with_env(monkeypatch, value)
-    assert reloaded.ENABLE_SERP_RENDER is False
+def test_empty_string_yields_none(monkeypatch):
+    reloaded = _reload_with_env(monkeypatch, "")
+    assert reloaded.SERPAPI_KEY is None
 
 
-def test_coerce_flag_helper_handles_whitespace():
-    # Direct helper test — doesn't require module reload
-    assert config._coerce_flag("  true  ") is True
-    assert config._coerce_flag(" 1 ") is True
-    assert config._coerce_flag("") is False
-    assert config._coerce_flag(None) is False
+def test_whitespace_only_yields_none(monkeypatch):
+    reloaded = _reload_with_env(monkeypatch, "   ")
+    assert reloaded.SERPAPI_KEY is None
+
+
+def test_value_with_leading_trailing_whitespace_is_stripped(monkeypatch):
+    reloaded = _reload_with_env(monkeypatch, "  mykey  ")
+    assert reloaded.SERPAPI_KEY == "mykey"
+
+
+def test_coerce_key_helper_direct():
+    # Direct helper unit-test — no module reload, no env mutation.
+    assert config._coerce_key(None) is None
+    assert config._coerce_key("") is None
+    assert config._coerce_key("   ") is None
+    assert config._coerce_key("abc") == "abc"
+    assert config._coerce_key("  abc  ") == "abc"
+    assert config._coerce_key("\t\nkey\n\t") == "key"
+
+
+def test_legacy_enable_serp_render_is_removed():
+    # Forcing function: any stale caller of the Playwright-era flag breaks
+    # loudly at attribute access, not silently with a wrong boolean. Unit 3
+    # (engine) and Unit 4 (UI) are the cleanup downstream; this test guards
+    # the cleanup completeness of Unit 1.
+    assert not hasattr(config, "ENABLE_SERP_RENDER")
+    assert not hasattr(config, "_coerce_flag")
+
+
+def test_serpapi_url_constant_shape():
+    assert config.SERPAPI_URL == "https://serpapi.com/search.json"
