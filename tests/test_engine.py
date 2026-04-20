@@ -1,22 +1,18 @@
-"""Unit 5: AnalysisEngine orchestration, retry, progress events, error paths."""
+"""Unit 3: AnalysisEngine orchestration, retry, progress events, error paths.
+
+After plan 003 the engine pairs Suggest (suggestqueries.google.com) with
+SerpAPI (PAA + Related in one ``engine=google`` call). Fake callables inject
+the provider behavior; the real RenderThread-based tests were replaced when
+the Playwright path was retired.
+"""
 
 from __future__ import annotations
 
-import threading
 import time
-from concurrent.futures import Future, TimeoutError as FutureTimeoutError
-from dataclasses import dataclass
-from pathlib import Path
 
 import pytest
 
-from seoserper.core.engine import AnalysisEngine, ProgressEvent, _build_serp_url
-from seoserper.core.render import (
-    BlockedByCaptchaError,
-    BlockedByConsentError,
-    BlockedRateLimitError,
-    BrowserCrashError,
-)
+from seoserper.core.engine import AnalysisEngine, ProgressEvent
 from seoserper.fetchers.suggest import SuggestResult
 from seoserper.models import (
     FailureCategory,
@@ -31,44 +27,29 @@ from seoserper.models import (
 from seoserper.storage import get_job
 
 
-# These tests were written before the Suggest-only pivot and assume full mode
-# (3 surfaces per job). Force the flag on for the module so existing behavior
-# stays covered. Pivot-specific (suggest-only) scenarios live at the bottom of
-# this file and explicitly patch the flag off.
 @pytest.fixture(autouse=True)
 def _full_mode(monkeypatch):
+    """Default to full mode (SERPAPI_KEY set) for top-level tests. The
+    SuggestOnlyMode / Adv1 nested classes monkeypatch this back to None.
+    """
     from seoserper import config
-    monkeypatch.setattr(config, "ENABLE_SERP_RENDER", True)
+    monkeypatch.setattr(config, "SERPAPI_KEY", "fake-key")
 
 
 # --- fakes -------------------------------------------------------------------
 
 
-class FakeRenderThread:
-    """Matches RenderThread.submit() surface. Configurable outcome per call."""
-
-    def __init__(self, html: str | BaseException = "<html/>"):
-        self.outcome = html
-        self.calls: list[str] = []
-
-    def submit(self, url: str) -> Future:
-        self.calls.append(url)
-        fut: Future = Future()
-        if isinstance(self.outcome, BaseException):
-            fut.set_exception(self.outcome)
-        else:
-            fut.set_result(self.outcome)
-        return fut
-
-
-def _ok_suggest(query="coffee") -> SuggestResult:
+def _ok_suggest(query: str = "coffee") -> SuggestResult:
     return SuggestResult(
         status=SurfaceStatus.OK,
-        items=[Suggestion(text=query, rank=1), Suggestion(text=f"{query} shop", rank=2)],
+        items=[
+            Suggestion(text=query, rank=1),
+            Suggestion(text=f"{query} shop", rank=2),
+        ],
     )
 
 
-def _failed_suggest(category=FailureCategory.NETWORK_ERROR) -> SuggestResult:
+def _failed_suggest(category: FailureCategory = FailureCategory.NETWORK_ERROR) -> SuggestResult:
     return SuggestResult(status=SurfaceStatus.FAILED, failure_category=category)
 
 
@@ -85,9 +66,15 @@ def _ok_parsed() -> dict[SurfaceName, ParseResult]:
     }
 
 
+def _failed_parsed(category: FailureCategory) -> dict[SurfaceName, ParseResult]:
+    return {
+        SurfaceName.PAA: ParseResult(status=SurfaceStatus.FAILED, failure_category=category),
+        SurfaceName.RELATED: ParseResult(status=SurfaceStatus.FAILED, failure_category=category),
+    }
+
+
 def _drain(engine: AnalysisEngine, expect_complete: bool = True, timeout: float = 2.0
            ) -> list[ProgressEvent]:
-    """Block until a complete / error event arrives, returning all events."""
     deadline = time.monotonic() + timeout
     events: list[ProgressEvent] = []
     while time.monotonic() < deadline:
@@ -108,8 +95,7 @@ def _drain(engine: AnalysisEngine, expect_complete: bool = True, timeout: float 
 
 def test_submit_creates_job_and_returns_id(db_path):
     engine = AnalysisEngine(
-        render_thread=FakeRenderThread(),
-        parse_fn=lambda html, locale: _ok_parsed(),
+        serp_fn=lambda q, l, c: _ok_parsed(),
         db_path=db_path,
         fetch_fn=lambda q, l, c: _ok_suggest(q),
     )
@@ -122,15 +108,15 @@ def test_submit_creates_job_and_returns_id(db_path):
 
     job = get_job(job_id, db_path=db_path)
     assert job.status == JobStatus.COMPLETED
+    assert job.render_mode == "full"
     for name in SurfaceName:
         assert job.surfaces[name].status == SurfaceStatus.OK
 
 
 def test_partial_success_counts_as_completed(db_path):
-    """ok_count >= 1 rule: Suggest ok + render captcha → still completed."""
+    """ok_count >= 1 rule: Suggest ok + SerpAPI rate-limited → still completed."""
     engine = AnalysisEngine(
-        render_thread=FakeRenderThread(html=BlockedByCaptchaError("captcha")),
-        parse_fn=lambda html, locale: _ok_parsed(),
+        serp_fn=lambda q, l, c: _failed_parsed(FailureCategory.BLOCKED_RATE_LIMIT),
         db_path=db_path,
         fetch_fn=lambda q, l, c: _ok_suggest(q),
     )
@@ -142,15 +128,14 @@ def test_partial_success_counts_as_completed(db_path):
     job = get_job(job_id, db_path=db_path)
     assert job.surfaces[SurfaceName.SUGGEST].status == SurfaceStatus.OK
     assert job.surfaces[SurfaceName.PAA].status == SurfaceStatus.FAILED
-    assert job.surfaces[SurfaceName.PAA].failure_category == FailureCategory.BLOCKED_BY_CAPTCHA
-    assert job.surfaces[SurfaceName.RELATED].failure_category == FailureCategory.BLOCKED_BY_CAPTCHA
+    assert job.surfaces[SurfaceName.PAA].failure_category == FailureCategory.BLOCKED_RATE_LIMIT
+    assert job.surfaces[SurfaceName.RELATED].failure_category == FailureCategory.BLOCKED_RATE_LIMIT
     assert job.status == JobStatus.COMPLETED
 
 
 def test_all_failed_job_marks_failed(db_path):
     engine = AnalysisEngine(
-        render_thread=FakeRenderThread(html=BlockedRateLimitError("rate")),
-        parse_fn=lambda html, locale: _ok_parsed(),
+        serp_fn=lambda q, l, c: _failed_parsed(FailureCategory.NETWORK_ERROR),
         db_path=db_path,
         fetch_fn=lambda q, l, c: _failed_suggest(),
     )
@@ -161,22 +146,20 @@ def test_all_failed_job_marks_failed(db_path):
     assert get_job(job_id, db_path=db_path).status == JobStatus.FAILED
 
 
-# --- exception → category mapping --------------------------------------------
+# --- SerpAPI failure-category pass-through -----------------------------------
 
 
 @pytest.mark.parametrize(
-    "exc, expected",
+    "category",
     [
-        (BlockedByCaptchaError("x"), FailureCategory.BLOCKED_BY_CAPTCHA),
-        (BlockedByConsentError("x"), FailureCategory.BLOCKED_BY_CONSENT),
-        (BlockedRateLimitError("x"), FailureCategory.BLOCKED_RATE_LIMIT),
-        (BrowserCrashError("x"), FailureCategory.BROWSER_CRASH),
+        FailureCategory.BLOCKED_RATE_LIMIT,
+        FailureCategory.NETWORK_ERROR,
+        FailureCategory.SELECTOR_NOT_FOUND,
     ],
 )
-def test_render_exception_maps_to_failure_category(db_path, exc, expected):
+def test_serp_failure_categories_round_trip(db_path, category):
     engine = AnalysisEngine(
-        render_thread=FakeRenderThread(html=exc),
-        parse_fn=lambda html, locale: _ok_parsed(),
+        serp_fn=lambda q, l, c: _failed_parsed(category),
         db_path=db_path,
         fetch_fn=lambda q, l, c: _ok_suggest(q),
     )
@@ -184,62 +167,43 @@ def test_render_exception_maps_to_failure_category(db_path, exc, expected):
     _drain(engine)
     job = get_job(job_id, db_path=db_path)
     for name in (SurfaceName.PAA, SurfaceName.RELATED):
-        assert job.surfaces[name].failure_category == expected
+        assert job.surfaces[name].failure_category == category
 
 
-def test_render_timeout_maps_to_network_error(db_path):
-    class HangingRender(FakeRenderThread):
-        def submit(self, url):
-            fut = Future()
-            # never completes; engine times out
-            return fut
+def test_serp_fn_exception_flags_network_error(db_path):
+    """Defensive path: an unexpected bug inside the fetcher must not leak."""
+
+    def bomb(q, l, c):
+        raise RuntimeError("unexpected fetcher bug")
 
     engine = AnalysisEngine(
-        render_thread=HangingRender(),
-        parse_fn=lambda html, locale: _ok_parsed(),
+        serp_fn=bomb,
         db_path=db_path,
         fetch_fn=lambda q, l, c: _ok_suggest(q),
-        render_timeout=0.1,
     )
     job_id = engine.submit("coffee", "en", "us")
-    _drain(engine, timeout=3.0)
+    events = _drain(engine)
+    assert events[-1].kind == "complete"
     job = get_job(job_id, db_path=db_path)
     assert job.surfaces[SurfaceName.PAA].failure_category == FailureCategory.NETWORK_ERROR
     assert job.surfaces[SurfaceName.RELATED].failure_category == FailureCategory.NETWORK_ERROR
 
 
-def test_parser_exception_flagged_as_selector_not_found(db_path):
-    def broken_parse(html, locale):
-        raise RuntimeError("unexpected DOM shape")
+def test_serp_fn_missing_surface_key_flags_selector_not_found(db_path):
+    """If serp_fn dict is missing a surface key, engine treats it as SELECTOR_NOT_FOUND."""
 
-    engine = AnalysisEngine(
-        render_thread=FakeRenderThread(html="<html/>"),
-        parse_fn=broken_parse,
-        db_path=db_path,
-        fetch_fn=lambda q, l, c: _ok_suggest(q),
-    )
-    job_id = engine.submit("coffee", "en", "us")
-    _drain(engine)
-    job = get_job(job_id, db_path=db_path)
-    assert job.surfaces[SurfaceName.PAA].failure_category == FailureCategory.SELECTOR_NOT_FOUND
-    assert job.surfaces[SurfaceName.RELATED].failure_category == FailureCategory.SELECTOR_NOT_FOUND
-
-
-def test_parser_returns_none_for_surface_flagged_selector_not_found(db_path):
-    """If parser dict is missing a surface key, engine treats it as failed."""
-
-    def partial_parse(html, locale):
+    def partial(q, l, c):
         return {SurfaceName.PAA: ParseResult(status=SurfaceStatus.OK, items=[])}
 
     engine = AnalysisEngine(
-        render_thread=FakeRenderThread(html="<html/>"),
-        parse_fn=partial_parse,
+        serp_fn=partial,
         db_path=db_path,
         fetch_fn=lambda q, l, c: _ok_suggest(q),
     )
     job_id = engine.submit("coffee", "en", "us")
     _drain(engine)
     job = get_job(job_id, db_path=db_path)
+    assert job.surfaces[SurfaceName.PAA].status == SurfaceStatus.OK
     assert job.surfaces[SurfaceName.RELATED].failure_category == FailureCategory.SELECTOR_NOT_FOUND
 
 
@@ -247,19 +211,22 @@ def test_parser_returns_none_for_surface_flagged_selector_not_found(db_path):
 
 
 def test_retry_only_reruns_failed_surfaces(db_path):
-    """After initial run (Suggest ok, render captcha), retry with render ok →
+    """After initial run (Suggest ok, SerpAPI fails), retry with serp ok →
     PAA/Related become ok while Suggest stays ok (fetch_fn not called again)."""
 
-    suggest_calls = []
+    suggest_calls: list[tuple[str, str, str]] = []
 
     def fetch(q, l, c):
         suggest_calls.append((q, l, c))
         return _ok_suggest(q)
 
-    captcha_render = FakeRenderThread(html=BlockedByCaptchaError("captcha"))
+    serp_state = {"fn": lambda q, l, c: _failed_parsed(FailureCategory.BLOCKED_RATE_LIMIT)}
+
+    def serp(q, l, c):
+        return serp_state["fn"](q, l, c)
+
     engine = AnalysisEngine(
-        render_thread=captcha_render,
-        parse_fn=lambda html, locale: _ok_parsed(),
+        serp_fn=serp,
         db_path=db_path,
         fetch_fn=fetch,
     )
@@ -267,13 +234,12 @@ def test_retry_only_reruns_failed_surfaces(db_path):
     _drain(engine)
     assert len(suggest_calls) == 1
 
-    # Swap render to success and retry.
-    engine._render_thread = FakeRenderThread(html="<html/>")
+    # Swap serp to success and retry.
+    serp_state["fn"] = lambda q, l, c: _ok_parsed()
     engine.retry_failed_surfaces(job_id)
     _drain(engine)
 
-    # Suggest was NOT re-fetched
-    assert len(suggest_calls) == 1
+    assert len(suggest_calls) == 1  # Suggest not re-fetched
     job = get_job(job_id, db_path=db_path)
     assert job.surfaces[SurfaceName.SUGGEST].status == SurfaceStatus.OK
     assert job.surfaces[SurfaceName.PAA].status == SurfaceStatus.OK
@@ -282,37 +248,37 @@ def test_retry_only_reruns_failed_surfaces(db_path):
 
 def test_retry_noop_when_all_ok(db_path):
     engine = AnalysisEngine(
-        render_thread=FakeRenderThread(),
-        parse_fn=lambda html, locale: _ok_parsed(),
+        serp_fn=lambda q, l, c: _ok_parsed(),
         db_path=db_path,
         fetch_fn=lambda q, l, c: _ok_suggest(q),
     )
     job_id = engine.submit("coffee", "en", "us")
     _drain(engine)
 
-    suggest_calls_before = [
-        e for e in iter(lambda: engine.progress_queue.get_nowait() if not engine.progress_queue.empty() else None, None)
-    ]
-    # Retry on an all-ok job must NOT spawn a new worker
+    # Retry on an all-ok job must NOT spawn a new worker.
     engine.retry_failed_surfaces(job_id)
     time.sleep(0.1)
     assert engine.progress_queue.empty()
 
 
-def test_retry_preserves_ok_on_retry_render(db_path):
-    """Retry with render that returns ok parser but Suggest was previously ok:
-    Suggest must not be clobbered even if some parse result arrives for it."""
+def test_retry_preserves_ok_on_retry_serp(db_path):
+    """Suggest ok + SerpAPI fail initially; retry with serp ok and a fetch_fn
+    that would fail if called again — Suggest must not be re-called."""
     calls = {"fetch": 0}
 
     def fetch(q, l, c):
         calls["fetch"] += 1
         if calls["fetch"] == 1:
             return _ok_suggest(q)
-        return _failed_suggest()  # on retry would fail — but must not be called
+        return _failed_suggest()
+
+    serp_state = {"fn": lambda q, l, c: _failed_parsed(FailureCategory.BLOCKED_RATE_LIMIT)}
+
+    def serp(q, l, c):
+        return serp_state["fn"](q, l, c)
 
     engine = AnalysisEngine(
-        render_thread=FakeRenderThread(html=BlockedByCaptchaError("x")),
-        parse_fn=lambda html, locale: _ok_parsed(),
+        serp_fn=serp,
         db_path=db_path,
         fetch_fn=fetch,
     )
@@ -320,11 +286,10 @@ def test_retry_preserves_ok_on_retry_render(db_path):
     _drain(engine)
     assert calls["fetch"] == 1
 
-    engine._render_thread = FakeRenderThread(html="<html/>")
+    serp_state["fn"] = lambda q, l, c: _ok_parsed()
     engine.retry_failed_surfaces(job_id)
     _drain(engine)
-    # fetch should not have been called again
-    assert calls["fetch"] == 1
+    assert calls["fetch"] == 1  # fetch_fn NOT re-called
 
 
 # --- progress ordering -------------------------------------------------------
@@ -332,8 +297,7 @@ def test_retry_preserves_ok_on_retry_render(db_path):
 
 def test_progress_events_emit_in_expected_order(db_path):
     engine = AnalysisEngine(
-        render_thread=FakeRenderThread(),
-        parse_fn=lambda html, locale: _ok_parsed(),
+        serp_fn=lambda q, l, c: _ok_parsed(),
         db_path=db_path,
         fetch_fn=lambda q, l, c: _ok_suggest(q),
     )
@@ -348,15 +312,13 @@ def test_progress_events_emit_in_expected_order(db_path):
 
 def test_two_concurrent_submits_dont_interfere(db_path):
     engine = AnalysisEngine(
-        render_thread=FakeRenderThread(),
-        parse_fn=lambda html, locale: _ok_parsed(),
+        serp_fn=lambda q, l, c: _ok_parsed(),
         db_path=db_path,
         fetch_fn=lambda q, l, c: _ok_suggest(q),
     )
     id_a = engine.submit("coffee", "en", "us")
     id_b = engine.submit("tea", "en", "us")
 
-    # Drain for up to 3s; we expect 2 complete events total
     deadline = time.monotonic() + 3.0
     completes = {}
     while time.monotonic() < deadline and len(completes) < 2:
@@ -367,40 +329,19 @@ def test_two_concurrent_submits_dont_interfere(db_path):
         if ev.kind == "complete":
             completes[ev.job_id] = ev
     assert id_a in completes and id_b in completes
-
     assert get_job(id_a, db_path=db_path).status == JobStatus.COMPLETED
     assert get_job(id_b, db_path=db_path).status == JobStatus.COMPLETED
-
-
-# --- url builder -------------------------------------------------------------
-
-
-def test_build_serp_url_quotes_spaces_and_specials():
-    url = _build_serp_url("best running shoes", "en", "us")
-    assert "q=best+running+shoes" in url
-    assert "hl=en" in url
-    assert "gl=us" in url
-
-
-def test_build_serp_url_quotes_unicode():
-    url = _build_serp_url("跑步鞋推荐", "zh-CN", "cn")
-    # Must be fully percent-encoded
-    assert "q=%E8%B7%91" in url
-    assert "hl=zh-CN" in url
 
 
 # --- unhandled exception safety ---------------------------------------------
 
 
 def test_unhandled_exception_leaves_job_in_terminal_state(db_path):
-    """If engine worker blows up, all running surfaces get flagged and job completes."""
-
     def bomb(q, l, c):
         raise RuntimeError("unexpected boom")
 
     engine = AnalysisEngine(
-        render_thread=FakeRenderThread(),
-        parse_fn=lambda html, locale: _ok_parsed(),
+        serp_fn=lambda q, l, c: _ok_parsed(),
         db_path=db_path,
         fetch_fn=bomb,
     )
@@ -410,25 +351,23 @@ def test_unhandled_exception_leaves_job_in_terminal_state(db_path):
     job = get_job(job_id, db_path=db_path)
     assert job.status != JobStatus.RUNNING
     for name in SurfaceName:
-        # all surfaces should be in a terminal state
         assert job.surfaces[name].status != SurfaceStatus.RUNNING
 
 
-# --- Suggest-only mode (Unit 2 of pivot plan 2026-04-20-002) -----------------
+# --- Suggest-only mode (SERPAPI_KEY unset) -----------------------------------
 
 
 class TestSuggestOnlyMode:
-    """ENABLE_SERP_RENDER=False: engine skips render, writes only Suggest row."""
+    """SERPAPI_KEY=None: engine skips SerpAPI, writes only Suggest row."""
 
     @pytest.fixture(autouse=True)
-    def _flag_off(self, monkeypatch):
+    def _no_key(self, monkeypatch):
         from seoserper import config
-        monkeypatch.setattr(config, "ENABLE_SERP_RENDER", False)
+        monkeypatch.setattr(config, "SERPAPI_KEY", None)
 
     def test_submit_creates_suggest_only_job(self, db_path):
         engine = AnalysisEngine(
-            render_thread=None,
-            parse_fn=None,
+            serp_fn=None,
             db_path=db_path,
             fetch_fn=lambda q, l, c: _ok_suggest(q),
         )
@@ -444,30 +383,25 @@ class TestSuggestOnlyMode:
         kinds = [e.kind for e in events]
         assert kinds == ["start", "suggest", "complete"]
 
-    def test_submit_does_not_call_render_thread(self, db_path):
-        # render_thread=None would raise if engine ever called .submit on it.
-        # Also pass a tracker object as a defensive double-check.
-        called: list[str] = []
+    def test_submit_does_not_call_serp_fn(self, db_path):
+        calls: list[tuple[str, str, str]] = []
 
-        class TrackingRender:
-            def submit(self, url):
-                called.append(url)
-                raise AssertionError("render_thread must not be called in suggest-only")
+        def tracking_serp(q, l, c):
+            calls.append((q, l, c))
+            raise AssertionError("serp_fn must not be called in suggest-only mode")
 
         engine = AnalysisEngine(
-            render_thread=TrackingRender(),
-            parse_fn=None,
+            serp_fn=tracking_serp,
             db_path=db_path,
             fetch_fn=lambda q, l, c: _ok_suggest(q),
         )
         engine.submit("coffee", "en", "us")
         _drain(engine)
-        assert called == []
+        assert calls == []
 
     def test_suggest_failed_yields_job_failed(self, db_path):
         engine = AnalysisEngine(
-            render_thread=None,
-            parse_fn=None,
+            serp_fn=None,
             db_path=db_path,
             fetch_fn=lambda q, l, c: _failed_suggest(FailureCategory.NETWORK_ERROR),
         )
@@ -477,7 +411,7 @@ class TestSuggestOnlyMode:
         assert job.status == JobStatus.FAILED
         assert events[-1].status == "failed"
 
-    def test_retry_on_suggest_only_does_not_invoke_render(self, db_path):
+    def test_retry_on_suggest_only_does_not_invoke_serp(self, db_path):
         call_count = {"fetch": 0}
 
         def flaky_fetch(q, l, c):
@@ -487,8 +421,7 @@ class TestSuggestOnlyMode:
             return _ok_suggest(q)
 
         engine = AnalysisEngine(
-            render_thread=None,
-            parse_fn=None,
+            serp_fn=None,
             db_path=db_path,
             fetch_fn=flaky_fetch,
         )
@@ -501,21 +434,20 @@ class TestSuggestOnlyMode:
 
         job = get_job(jid, db_path=db_path)
         assert job.status == JobStatus.COMPLETED
-        assert call_count["fetch"] == 2  # initial + retry
+        assert call_count["fetch"] == 2
 
 
 class TestAdv1HistoricalRetryGuard:
-    """Pre-pivot full-mode job retried under flag=False must not invoke render."""
+    """Full-mode job retried under SERPAPI_KEY=None must not invoke serp_fn."""
 
     def test_coerces_to_suggest_only_retry(self, db_path, monkeypatch):
         from seoserper import config
 
-        # Step 1: create a full-mode job with flag=True + 3 surfaces, Suggest ok,
-        # render fails for PAA+Related. This mimics a pre-pivot failed attempt.
-        monkeypatch.setattr(config, "ENABLE_SERP_RENDER", True)
+        # Step 1: create a full-mode job with SERPAPI_KEY set, Suggest ok +
+        # PAA/Related failed (mimics a pre-key-rotation failed attempt).
+        monkeypatch.setattr(config, "SERPAPI_KEY", "fake-key")
         engine_full = AnalysisEngine(
-            render_thread=FakeRenderThread(html=BlockedByCaptchaError("captcha")),
-            parse_fn=lambda html, locale: _ok_parsed(),
+            serp_fn=lambda q, l, c: _failed_parsed(FailureCategory.BLOCKED_RATE_LIMIT),
             db_path=db_path,
             fetch_fn=lambda q, l, c: _ok_suggest(q),
         )
@@ -527,56 +459,45 @@ class TestAdv1HistoricalRetryGuard:
         assert job.surfaces[SurfaceName.RELATED].status == SurfaceStatus.FAILED
         assert job.surfaces[SurfaceName.SUGGEST].status == SurfaceStatus.OK
 
-        # Step 2: flip flag off (simulates shipping the pivot + session restart)
-        # and instantiate a new engine with render_thread=None. Retry must NOT
-        # attempt render on the historical full-mode job.
-        monkeypatch.setattr(config, "ENABLE_SERP_RENDER", False)
-        engine_so = AnalysisEngine(
-            render_thread=None,  # no render thread under flag=False
-            parse_fn=None,
+        # Step 2: unset SERPAPI_KEY and instantiate a new engine with
+        # serp_fn=None. Retry must NOT attempt SerpAPI on the historical job.
+        monkeypatch.setattr(config, "SERPAPI_KEY", None)
+        engine_nokey = AnalysisEngine(
+            serp_fn=None,
             db_path=db_path,
             fetch_fn=lambda q, l, c: _ok_suggest(q),
         )
 
-        # Retry: Suggest was already ok, PAA/Related were failed. Under ADV-1
-        # guard, retry should no-op (Suggest already ok, render is skipped).
-        engine_so.retry_failed_surfaces(jid)
-        # Drain any events (expect none — retry should not spawn a worker)
+        engine_nokey.retry_failed_surfaces(jid)
         time.sleep(0.1)
-        assert engine_so.progress_queue.empty()
+        assert engine_nokey.progress_queue.empty()
 
-        # Most importantly: no AttributeError / crash from calling None.submit
+        # No AttributeError / crash from calling None serp_fn.
         job_after = get_job(jid, db_path=db_path)
-        assert job_after.render_mode == "full"  # unchanged
-        # PAA/Related stay as-is (FAILED) — not re-rendered, not mutated
+        assert job_after.render_mode == "full"  # stored value unchanged
         assert job_after.surfaces[SurfaceName.PAA].status == SurfaceStatus.FAILED
         assert job_after.surfaces[SurfaceName.RELATED].status == SurfaceStatus.FAILED
 
     def test_retries_suggest_when_suggest_also_failed(self, db_path, monkeypatch):
-        """Historical full-mode job with Suggest=failed + flag off → retry Suggest only."""
         from seoserper import config
 
-        monkeypatch.setattr(config, "ENABLE_SERP_RENDER", True)
-        # Full-mode submit where Suggest fails AND render fails
+        monkeypatch.setattr(config, "SERPAPI_KEY", "fake-key")
         engine_full = AnalysisEngine(
-            render_thread=FakeRenderThread(html=BlockedByCaptchaError("captcha")),
-            parse_fn=lambda html, locale: _ok_parsed(),
+            serp_fn=lambda q, l, c: _failed_parsed(FailureCategory.BLOCKED_RATE_LIMIT),
             db_path=db_path,
             fetch_fn=lambda q, l, c: _failed_suggest(FailureCategory.NETWORK_ERROR),
         )
         jid = engine_full.submit("coffee", "en", "us")
         _drain(engine_full)
 
-        # Flip flag off, recover Suggest but not render
-        monkeypatch.setattr(config, "ENABLE_SERP_RENDER", False)
-        engine_so = AnalysisEngine(
-            render_thread=None,
-            parse_fn=None,
+        monkeypatch.setattr(config, "SERPAPI_KEY", None)
+        engine_nokey = AnalysisEngine(
+            serp_fn=None,
             db_path=db_path,
             fetch_fn=lambda q, l, c: _ok_suggest(q),
         )
-        engine_so.retry_failed_surfaces(jid)
-        _drain(engine_so)
+        engine_nokey.retry_failed_surfaces(jid)
+        _drain(engine_nokey)
 
         job = get_job(jid, db_path=db_path)
         assert job.surfaces[SurfaceName.SUGGEST].status == SurfaceStatus.OK
@@ -585,19 +506,17 @@ class TestAdv1HistoricalRetryGuard:
         assert job.surfaces[SurfaceName.RELATED].status == SurfaceStatus.FAILED
 
 
-class TestEngineOptionalRenderThread:
-    """render_thread is Optional; engine must accept None when only Suggest runs."""
+class TestEngineOptionalSerpFn:
+    """serp_fn is Optional; engine must accept None when only Suggest runs."""
 
-    def test_accepts_none_render_thread(self, db_path, monkeypatch):
+    def test_accepts_none_serp_fn(self, db_path, monkeypatch):
         from seoserper import config
-        monkeypatch.setattr(config, "ENABLE_SERP_RENDER", False)
+        monkeypatch.setattr(config, "SERPAPI_KEY", None)
         engine = AnalysisEngine(
-            render_thread=None,
-            parse_fn=None,
+            serp_fn=None,
             db_path=db_path,
             fetch_fn=lambda q, l, c: _ok_suggest(q),
         )
-        # Construction + happy path both work with None
-        assert engine._render_thread is None
+        assert engine._serp_fn is None
         engine.submit("coffee", "en", "us")
         _drain(engine)
