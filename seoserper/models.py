@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Generic, TypeVar
 
 
 class SurfaceName(str, Enum):
@@ -55,6 +56,18 @@ class PAAQuestion:
 class RelatedSearch:
     query: str
     rank: int
+
+
+T = TypeVar("T")
+
+
+@dataclass
+class ParseResult(Generic[T]):
+    """Result from parsing a surface (PAA or Related Searches)."""
+
+    status: SurfaceStatus
+    items: list[T] = field(default_factory=list)
+    failure_category: FailureCategory | None = None
 
 
 @dataclass
