@@ -35,7 +35,8 @@ from dataclasses import dataclass
 from typing import Callable
 
 from seoserper import config
-from seoserper.fetchers.suggest import SuggestResult, fetch_suggestions
+from seoserper.fetchers.suggest import SuggestResult
+from seoserper.suggest import get_suggestions
 from seoserper.models import (
     FailureCategory,
     JobStatus,
@@ -57,6 +58,18 @@ SerpFn = Callable[[str, str, str], dict[SurfaceName, ParseResult]]
 FetchFn = Callable[[str, str, str], SuggestResult]
 
 
+def _engine_suggest_fn(query: str, lang: str, country: str) -> SuggestResult:
+    """Engine-context wrapper over ``seoserper.suggest.get_suggestions``.
+
+    Pins ``retry=False`` so the library's internal transient retry is
+    disabled here — ``AnalysisEngine.retry_failed_surfaces`` is the sole
+    retry layer under engine context. Without this pin a single Submit +
+    one operator retry would compound to up to 4 upstream hits per failing
+    surface (plan 007 Key Decision).
+    """
+    return get_suggestions(query, lang, country, retry=False)
+
+
 @dataclass
 class ProgressEvent:
     """Single message in the engine → UI queue."""
@@ -73,7 +86,7 @@ class AnalysisEngine:
         *,
         serp_fn: SerpFn | None = None,
         db_path: str | None = None,
-        fetch_fn: FetchFn = fetch_suggestions,
+        fetch_fn: FetchFn = _engine_suggest_fn,
     ):
         # serp_fn is Optional: under SERPAPI_KEY=None the engine never enters
         # _do_serp, so the fetcher is unnecessary. The invariant

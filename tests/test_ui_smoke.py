@@ -239,9 +239,13 @@ def test_compare_submit_creates_two_jobs(monkeypatch, tmp_path):
 
     # Stub the suggest fetcher too.
     from seoserper.fetchers.suggest import SuggestResult
+    # Plan 007 Unit 5: engine now routes through _engine_suggest_fn (a thin
+    # wrapper pinning retry=False and delegating to seoserper.suggest.
+    # get_suggestions). Patch the wrapper so the test doesn't depend on the
+    # library's internals.
     import seoserper.core.engine as _eng
     monkeypatch.setattr(
-        _eng, "fetch_suggestions",
+        _eng, "_engine_suggest_fn",
         lambda q, l, c: SuggestResult(status=SurfaceStatus.EMPTY),
     )
 

@@ -660,3 +660,40 @@ class TestBingEngine:
 
         assert calls_by_query["coffee"] == ["google"]
         assert calls_by_query["tea"] == ["bing"]
+
+
+class TestDefaultFetchFn:
+    """Plan 007 Unit 5: engine's default fetch_fn wraps get_suggestions with retry=False.
+
+    Load-bearing architectural decision: without the pin, retry_failed_surfaces
+    compounds on top of the library's 1-retry, inflating upstream hits per
+    failing surface from <=2 to <=4 across Submit + operator retry.
+    """
+
+    def test_default_fetch_fn_is_engine_wrapper(self, db_path):
+        from seoserper.core.engine import AnalysisEngine, _engine_suggest_fn
+        eng = AnalysisEngine(db_path=db_path, serp_fn=lambda q, l, c: {})
+        assert eng._fetch_fn is _engine_suggest_fn
+
+    def test_engine_wrapper_pins_retry_false(self, db_path, monkeypatch):
+        """Verify _engine_suggest_fn calls get_suggestions with retry=False.
+
+        Monkeypatches the library target to capture kwargs — proves the pin
+        is wired, not just documented.
+        """
+        captured: dict = {}
+
+        def fake_get_suggestions(q, hl, gl, **kwargs):
+            captured.update(kwargs)
+            return SuggestResult(status=SurfaceStatus.OK, items=[])
+
+        monkeypatch.setattr(
+            "seoserper.core.engine.get_suggestions", fake_get_suggestions
+        )
+
+        from seoserper.core.engine import _engine_suggest_fn
+        _engine_suggest_fn("coffee", "en", "us")
+        assert captured.get("retry") is False, (
+            "engine must pin retry=False to prevent compounded retries; "
+            f"got kwargs={captured}"
+        )
