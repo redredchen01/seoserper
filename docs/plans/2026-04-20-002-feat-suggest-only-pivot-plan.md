@@ -30,7 +30,7 @@ Pre-plan spike (2026-04-20) showed 5/5 real Playwright `/search` queries from th
 - **R-SC-kill** Suggest failure rate > 20% in any 20-query rolling window → tool unusable (pivot §Success Criteria, new kill criterion).
 - **R-Retry** Retry reads `job.render_mode` (not the live flag) and re-runs only Suggest when `render_mode=suggest-only` (pivot §D3 + Deferred #2 resolution). Historical full-mode jobs interact with the dormant path — see ADV-1 under "Findings requiring judgment".
 - **R-Preflight** Preflight failure is a soft warning when flag=False, hard block only when flag=True (pivot §D4 + Deferred #3).
-- **R-Sunset** No hardcoded 2026-07-19 deadline in source code or user-facing message. External calendar reminder (persisted in auto-memory) is the sole re-evaluation trigger as of this plan. **Note:** product-lens review (ADV-2/F2) argues this is weak enforcement and recommends a failing-pytest-after-sunset-date artifact as a stronger alternative — surfaced as a judgment item below, not pre-resolved here.
+- **R-Sunset** Sunset on 2026-07-19 is enforced by a failing pytest — `tests/test_sunset.py` asserts `today < 2026-07-19`. On that date CI turns red, forcing an explicit extend-or-delete decision instead of silent drift. The auto-memory calendar reminder remains as a soft heads-up.
 
 ## Scope Boundaries
 
@@ -65,10 +65,13 @@ None consulted. Local patterns are strong and the change is well-bounded.
 
 - **Dual env + constant for the flag.** `seoserper/config.py` exposes `ENABLE_SERP_RENDER: bool` populated at module import from `SEOSERPER_ENABLE_SERP_RENDER`. Rationale: env-var is consulted only once per process startup so Streamlit restarts (not live attribute changes) are the natural reload boundary. Reads of `config.ENABLE_SERP_RENDER` from the engine *do* go through module-attribute lookup — so tests can monkeypatch the attribute directly to flip behavior without restarting. This is a deployment convention (one process = one flag value), not a code-enforced invariant. Historical jobs are insulated from live mutation via `render_mode` stamping at submit time.
 - **Flag consumed at the engine boundary, not inside each method.** `AnalysisEngine.submit` reads the flag once and sets both `run_render=False` and `render_mode='suggest-only'` on the job at creation. Downstream code (`_run_analysis`, `_do_serp`, `_apply_parsed_surface`) doesn't need to know about the flag. Rationale: single responsibility for flag consumption keeps the dormant code path cleanly bypassed.
+- **`AnalysisEngine.__init__` accepts `render_thread: RenderThread | None = None`**, replacing the original "NoopRenderThread sentinel" plan. Rationale: 4-reviewer consensus flagged the sentinel as speculative abstraction — Unit 2 is already modifying the engine contract, so a type annotation change is strictly simpler than a new sentinel class defined "inline in app.py". `_do_serp` adds a defensive `assert self._render_thread is not None` at entry; the control flow guarantees this via `run_render=False`, but the assert makes the invariant machine-checked rather than convention.
+- **Retry of pre-pivot full-mode jobs is gated by the live flag, not just by `render_mode`.** `retry_failed_surfaces` coerces retry to Suggest-only when `job.render_mode == 'full' AND config.ENABLE_SERP_RENDER is False` — otherwise the historical job's full-mode render_mode would drive `run_render=True` and call `.submit()` on a `None` render_thread. Reason: adversarial ADV-1 surfaced this as a concrete crash path. The coercion preserves Suggest retry on historical rows, leaves PAA/Related as whatever state they're in, and avoids the dormant-path invocation.
+- **"Degraded" label is reserved for full-mode partial-failure only.** UI derivation table: `(render_mode, overall_status, ok_count)` → label. `suggest-only + completed + *` → "ok" (no special badge — the top-of-page mode notice already signals context). `full + completed + ok_count < 3` → "degraded". `* + failed + *` → "failed". Rationale: adversarial ADV-4 showed the original plan painted every normal suggest-only success as "degraded", destroying the warning signal.
 - **`render_mode` is stored, not derived.** A job created under flag=False carries `render_mode='suggest-only'` in its jobs row forever, even if the flag later flips. Rationale: historical exports stay self-consistent; re-viewing an old job doesn't reinterpret under new flag state.
 - **PAA / Related surfaces are not created when flag=False.** `storage.create_job` conditionally inserts only the Suggest surface row. Rationale: scope-guardian SC-4 — storage reflects what was attempted, not ghost rows with overloaded `blocked_rate_limit` category that would pollute the kill-criterion measurement.
 - **Preflight soft-fail via UI branching.** `app.py` reads `config.ENABLE_SERP_RENDER` and changes the failed-preflight handling: render a muted banner + let Submit proceed vs. hard `st.error` + early return. Rationale: user running Suggest-only shouldn't need 170 MB of Chromium installed (feasibility F7).
-- **User-facing docs at `docs/how-to-re-enable-serp.md`.** Kebab-case matches repo convention (plans / brainstorms use the same). UI notice links via relative markdown reference; Streamlit can't navigate to it but it renders as a visible pointer in dev. Rationale: keep the config name out of the banner copy (adversarial ADV-4).
+- **Recovery instructions live in `seoserper/config.py` module docstring, not a separate docs file.** Reviewer consensus (scope-guardian F2 + adversarial ADV-5 + design-lens F1): a standalone HOW_TO.md for a solo-operator tool is ceremony, and the `docs/...` reference in the UI notice is a dead pointer (Streamlit can't navigate relative paths). Single source of truth: config.py docstring documents the flag, the env-var form, the "restart required" behavior, the caveat that Unit 4 parser is unshipped, and the kill criterion. UI notice drops the path reference entirely and reads just `Suggest-only 模式 · 当前网络限速中`. Rationale: minimizes artifact surface (no new file to maintain to the 2026-07-19 sunset), keeps the config identifier out of user copy (adversarial ADV-4), and trusts the solo operator to know config.py exists.
 - **Retry gate uses `render_mode`, not flag.** `AnalysisEngine.retry_failed_surfaces` checks `job.render_mode == 'suggest-only'` rather than `config.ENABLE_SERP_RENDER`. Rationale: a retry on a historical suggest-only job stays suggest-only even if the flag has since flipped — prevents mixed-mode jobs.
 
 ## Open Questions
@@ -175,6 +178,7 @@ Unit 1 is foundational (schema + flag); Unit 2 and Unit 3 can land in either ord
 - Modify: `seoserper/models.py` — add `render_mode: str = "full"` to `AnalysisJob` dataclass (moved from Unit 2 so hydration works end-to-end within Unit 1; the Unit 2 dependency previously carried this but forward-dep would break Unit 1's own test scenarios)
 - Test: `tests/test_storage.py` — add 5 scenarios per list below
 - Test: `tests/test_config.py` — **create new file** — 3 scenarios for env-var coercion
+- Test: `tests/test_sunset.py` — **create new file** — single assertion that `datetime.now(tz=UTC) < datetime(2026, 7, 19, tz=UTC)` so CI turns red on the sunset date and forces an explicit extend-or-delete decision
 
 **Approach:**
 - Config: `ENABLE_SERP_RENDER = os.environ.get("SEOSERPER_ENABLE_SERP_RENDER", "").strip().lower() in {"1", "true", "yes", "on"}`. Docstring notes forgiving coercion.
@@ -221,6 +225,7 @@ Unit 1 is foundational (schema + flag); Unit 2 and Unit 3 can land in either ord
 *(Note: the `render_mode` field on `AnalysisJob` and the storage hydration updates moved to Unit 1 so that Unit's own test scenarios about hydration pass. Unit 2 now touches only engine behavior.)*
 
 **Approach:**
+- `AnalysisEngine.__init__` signature: `render_thread: RenderThread | None = None` (changed from required positional). When `None`, `_do_serp` is never entered because `run_render=False` — an `assert self._render_thread is not None` at the top of `_do_serp` makes the invariant machine-checked.
 - `AnalysisEngine.submit`:
   - Read `config.ENABLE_SERP_RENDER` once at the top
   - Pick `render_mode = "full" if config.ENABLE_SERP_RENDER else "suggest-only"`
@@ -229,10 +234,10 @@ Unit 1 is foundational (schema + flag); Unit 2 and Unit 3 can land in either ord
 - `_run_analysis` unchanged — it already respects `run_render`
 - `retry_failed_surfaces(job_id)`:
   - Read `job.render_mode`
-  - If `"suggest-only"`: only set `run_suggest = job.surfaces[SUGGEST].status != OK`; `run_render = False` unconditionally
-  - If `"full"`: current behavior
+  - If `"suggest-only"`: only retry Suggest when `job.surfaces[SUGGEST].status != OK`; `run_render=False` unconditionally
+  - If `"full"` **and** `config.ENABLE_SERP_RENDER is False`: **coerce to suggest-only retry semantics** — retry Suggest only if it's non-ok, leave PAA/Related surfaces as-is, do NOT attempt render. This is the ADV-1 crash-path guard: a historical full-mode job must not invoke `.submit()` on a `None` render_thread.
+  - If `"full"` **and** `config.ENABLE_SERP_RENDER is True`: current full-mode retry behavior (retry any non-ok surface with render if needed)
 - `complete_job` rule unchanged — it already counts ok surfaces; with 1 surface, ok_count ≥ 1 means the Suggest surface returned ok
-- Hydration: `_hydrate_job` adds `render_mode=job_row["render_mode"]` to the AnalysisJob construction; same for `_hydrate_job_from_blob`
 
 **Patterns to follow:**
 - `seoserper/core/engine.py::AnalysisEngine._spawn_worker` (existing DI + daemon thread pattern)
@@ -243,7 +248,8 @@ Unit 1 is foundational (schema + flag); Unit 2 and Unit 3 can land in either ord
 - **Happy path** (engine, flag=True): current 3-surface behavior preserved end-to-end
 - **Edge case** (engine): flag=False + Suggest returns failed → `complete_job` → `JobStatus.FAILED`; 1-surface ok_count rule honored
 - **Integration** (engine, retry): create a suggest-only job, Suggest returns failed first → retry → only fetch_fn called again, render_thread.submit not called
-- **Integration** (engine, retry): create a full-mode job with PAA failed → retry — behavior unchanged from current tests (no regression)
+- **Integration** (engine, retry ADV-1 guard): create a full-mode job (render_mode='full') with PAA failed under `ENABLE_SERP_RENDER=True`, then monkeypatch flag to False, instantiate engine with `render_thread=None`, invoke `retry_failed_surfaces(id)` → coerced to Suggest-only retry semantics; no AttributeError; PAA/Related left as-is in storage
+- **Integration** (engine, retry flag=True): create a full-mode job with PAA failed, flag stays True → behavior unchanged from current tests (no regression)
 - **Edge case** (engine): `retry_failed_surfaces` on a suggest-only job whose Suggest is already ok → no-op (no worker spawned; `progress_queue` stays empty)
 - **Happy path** (models): `AnalysisJob()` default → `render_mode == "full"` (backward-compat default)
 - **Integration** (hydration): suggest-only row round-trips through `get_job` → returned `AnalysisJob.render_mode == "suggest-only"`; `list_recent_jobs` also carries the field
@@ -306,7 +312,7 @@ Unit 1 is foundational (schema + flag); Unit 2 and Unit 3 can land in either ord
 
 **Files:**
 - Modify: `app.py` — add top-of-page notice when `config.ENABLE_SERP_RENDER is False`; change section rendering from "iterate SurfaceName" to "iterate job.surfaces.keys()"; guard `RenderThread()` instantiation; branch preflight failure handling on flag
-- Create: `docs/how-to-re-enable-serp.md` — user-facing doc explaining how to turn the flag back on (env var or config.py), what else needs to be true (fresh IP / network, optional future Unit 4 parser work), and the 2026-07-19 sunset context
+- Modify: `seoserper/config.py` module docstring — document `ENABLE_SERP_RENDER`: env-var form `SEOSERPER_ENABLE_SERP_RENDER=1`, restart-required behavior, Unit 4 parser unshipped caveat, kill criterion (20%/20 Suggest failure → stop), 2026-07-19 sunset pointer. Replaces the previously-planned `docs/how-to-re-enable-serp.md` file (reviewer consensus dropped the standalone doc as ceremony)
 - Modify: `tests/test_ui_smoke.py` — update existing smoke tests to pass under flag=False default; add 4 new smoke scenarios
 
 **Approach:**
@@ -315,13 +321,13 @@ Unit 1 is foundational (schema + flag); Unit 2 and Unit 3 can land in either ord
   - Do not instantiate `RenderThread` unconditionally in `_boot_engine` anymore. Guard on `config.ENABLE_SERP_RENDER`
   - When flag is False and preflight failed, set `ss._preflight_soft_fail = True` instead of hard blocking; main() renders the notice and continues
 - `_boot_engine`:
-  - If flag is False: `render_thread = None` (engine accepts this only when render_mode='suggest-only' — Unit 2 ensures submit sets it accordingly)
+  - If flag is False: instantiate engine with `render_thread=None` (engine's Unit 2 signature accepts this; `_do_serp` is never entered under `run_render=False`, and asserts non-None defensively)
   - If flag is True: current code path (start RenderThread, wire engine)
-  - `AnalysisEngine.__init__` signature has `render_thread` required — Unit 2 does not change that. **Planning decision**: pass a trivial `_NoopRenderThread` sentinel when flag is False. The engine never calls its methods because `run_render=False`. Defined inline in app.py. (Alternative: make engine accept `render_thread=None`; pivot doc's Deferred #3 already surfaces this. Keeping engine contract unchanged is lower-churn.)
 - Top-of-page notice (flag=False):
-  - `st.caption("Suggest-only 模式 · 当前网络限速中 · 恢复方式见 docs/how-to-re-enable-serp.md")`
-  - Plain prose. Muted (st.caption is grey by default). Not `st.error`, not `st.warning`, not italic markdown
+  - `st.caption("Suggest-only 模式 · 当前网络限速中")` (plain prose; no path / config identifier; recovery info lives in `seoserper/config.py` docstring)
+  - Muted grey (st.caption default). Not `st.error`, not `st.warning`, not italic
   - Placed between `st.title` and the input row
+  - **Stacked-notice rule**: under flag=False AND preflight failed, render a single merged caption `"Suggest-only 模式 · 当前网络限速中 · Playwright 未安装但当前模式无需"` instead of two stacked messages (design-lens F2 resolution)
 - Section rendering (`_render_current`):
   - Iterate over `job.surfaces` dict keys instead of hardcoded `(SUGGEST, PAA, RELATED)` loop
   - Under suggest-only, only Suggest is present → only one section renders
@@ -330,12 +336,12 @@ Unit 1 is foundational (schema + flag); Unit 2 and Unit 3 can land in either ord
   - Same iteration change: replace the hardcoded `(SUGGEST, PAA, RELATED)` badge loop with an iteration over `job.surfaces.keys()`, or with a fixed 3-slot loop that renders `·` (grey placeholder) for surfaces absent on the job. Pick the former for consistency with `_render_current` unless a per-row mode badge (see judgment item "sidebar mode distinguishability") is adopted.
 - Session state additions in `_ensure_session_state`:
   - New key `_preflight_soft_fail: bool` (distinct from existing `_preflight_ok`). Set when `preflight()` fails AND `config.ENABLE_SERP_RENDER is False`; consumed by `main()` to render the muted soft-warning instead of the hard `st.error` early-return.
-- `docs/how-to-re-enable-serp.md` — short markdown (< 1 page):
-  - What ENABLE_SERP_RENDER does
-  - How to flip: `export SEOSERPER_ENABLE_SERP_RENDER=1` or edit `seoserper/config.py`
+- `seoserper/config.py` module docstring content (same information, different container):
+  - What `ENABLE_SERP_RENDER` does
+  - How to flip: `export SEOSERPER_ENABLE_SERP_RENDER=1` in the shell before launching Streamlit, OR edit the constant directly; **Streamlit restart required** (env read is import-time one-shot per process)
   - What else is required: working network where /search isn't /sorry-redirected, and Unit 4 parser implementation landed (currently not shipped → PAA/Related will show stub failures even with flag on)
   - Kill criterion: if Suggest itself starts failing > 20% / 20-query window, stop using the tool
-  - 2026-07-19 sunset note
+  - 2026-07-19 sunset pointer — see `tests/test_sunset.py`
 
 **Execution note:** UI changes are hard to fully automate-test; smoke via AppTest catches the top-level structure only. Confirm manually with `streamlit run app.py` after Unit 4 lands — load under flag=False, submit a real query, inspect single-section rendering and notice text.
 
@@ -374,7 +380,7 @@ Unit 1 is foundational (schema + flag); Unit 2 and Unit 3 can land in either ord
 
 | Risk | Mitigation |
 |------|------------|
-| Engine `render_thread=None` breaks existing AnalysisEngine invariant (positional-kwarg-required) | Use a `_NoopRenderThread` sentinel in app.py — engine signature unchanged, zero runtime call surface when `run_render=False` |
+| Historical full-mode job retried while live flag=False would invoke `.submit()` on `None` render_thread | Engine's `retry_failed_surfaces` coerces `render_mode='full' + flag=False` to Suggest-only retry semantics — never enters `_do_serp`. Test scenario in Unit 2 asserts this. |
 | Schema migration runs on a DB that has a partial render_mode column from an interrupted earlier migration | `_migrate_jobs_add_render_mode` uses `PRAGMA table_info` check + `BEGIN IMMEDIATE` + duplicate-column swallow — race-safe by construction (mirrors proven `_migrate_jobs_add_source_columns`) |
 | Golden fixture drift during Unit 3 test updates introduces hidden regressions | Treat fixture updates as review-gate; diff must be clean (only new `render_mode:` line added or new file added); no behavior drift |
 | User flips flag manually without reading docs/how-to-re-enable-serp.md, misses that Unit 4 parser is not implemented | HOW_TO doc leads with the caveat; UI under flag=True still shows the current selector_not_found stub failure, which is itself diagnostic |
@@ -383,7 +389,7 @@ Unit 1 is foundational (schema + flag); Unit 2 and Unit 3 can land in either ord
 
 ## Documentation / Operational Notes
 
-- Create `docs/how-to-re-enable-serp.md` (Unit 4).
+- No new docs file created; recovery info lives in `seoserper/config.py` module docstring (Unit 4 edit).
 - Plan file itself is the operational record for the pivot — no CHANGELOG.md convention in this repo.
 - Memory entry for 2026-07-19 sunset reminder already persisted in this session's auto-memory; no further action in this plan.
 - Post-implementation: manual run of `streamlit run app.py` under both flag states is the acceptance ritual. No CI.
