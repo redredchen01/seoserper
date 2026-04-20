@@ -477,3 +477,19 @@ def cache_invalidate(cache_key: str, db_path: str | None = None) -> int:
             "DELETE FROM serp_cache WHERE cache_key = ?", (cache_key,)
         )
         return cursor.rowcount
+
+
+def delete_job(job_id: int, db_path: str | None = None) -> bool:
+    """Delete a job row and its surface rows. Returns True if deleted, False if absent.
+
+    Cascade via ``FOREIGN KEY REFERENCES jobs(id) ON DELETE CASCADE`` on the
+    surfaces table — get_connection sets ``PRAGMA foreign_keys=ON`` per
+    connection, so the cascade actually fires. Defensive: the function also
+    explicitly deletes surface rows first, so a connection that somehow
+    has foreign_keys=OFF still leaves no orphan rows behind.
+    """
+    with get_connection(db_path) as conn:
+        # Defensive order: kids first, then parent. Idempotent if cascade is on.
+        conn.execute("DELETE FROM surfaces WHERE job_id = ?", (job_id,))
+        cursor = conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+        return cursor.rowcount > 0

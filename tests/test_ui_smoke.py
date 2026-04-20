@@ -196,6 +196,72 @@ def test_history_filter_no_match_shows_caption(monkeypatch, tmp_path):
     assert any("无匹配" in c and "xxyyzz" in c for c in captions), captions
 
 
+def test_history_row_renders_delete_button(monkeypatch, tmp_path):
+    """Each history row gets a 🗑️ delete button next to the main + 🔄."""
+    _patch_key(monkeypatch, None)
+    _isolate_db(monkeypatch, tmp_path)
+    from seoserper.storage import init_db
+    db = str(tmp_path / "ui.db")
+    init_db(db)
+    ids = _seed_jobs(db, ["coffee"])
+
+    at = AppTest.from_file(APP_PATH).run(timeout=10)
+    keys = [b.key for b in at.sidebar.button]
+    assert f"del_{ids[0]}" in keys, keys
+
+
+def test_delete_button_arm_and_confirm_removes_row(monkeypatch, tmp_path):
+    """First click arms (changes label ⚠️), second click deletes + row gone."""
+    _patch_key(monkeypatch, None)
+    _isolate_db(monkeypatch, tmp_path)
+    from seoserper.storage import init_db, get_job
+    db = str(tmp_path / "ui.db")
+    init_db(db)
+    ids = _seed_jobs(db, ["coffee", "tea"])
+    coffee_id, tea_id = ids
+
+    at = AppTest.from_file(APP_PATH).run(timeout=10)
+
+    # First click on coffee's 🗑️ — arms only, no deletion.
+    del_btns = [b for b in at.sidebar.button if b.key == f"del_{coffee_id}"]
+    assert len(del_btns) == 1
+    del_btns[0].click().run(timeout=10)
+
+    assert get_job(coffee_id, db_path=db) is not None, "armed state shouldn't delete"
+    # After arm, the button rerenders — same key, primary type now (per code).
+    del_btns_armed = [b for b in at.sidebar.button if b.key == f"del_{coffee_id}"]
+    assert len(del_btns_armed) == 1
+
+    # Second click on the same armed button — actually deletes.
+    del_btns_armed[0].click().run(timeout=10)
+
+    assert get_job(coffee_id, db_path=db) is None, "second click should delete"
+    # Tea row still present, and its delete button still has the pristine key.
+    assert get_job(tea_id, db_path=db) is not None
+
+
+def test_delete_on_different_job_rearms(monkeypatch, tmp_path):
+    """Arming one job then clicking another job's 🗑️ moves the arm — no
+    collateral deletes."""
+    _patch_key(monkeypatch, None)
+    _isolate_db(monkeypatch, tmp_path)
+    from seoserper.storage import init_db, get_job
+    db = str(tmp_path / "ui.db")
+    init_db(db)
+    ids = _seed_jobs(db, ["coffee", "tea"])
+    coffee_id, tea_id = ids
+
+    at = AppTest.from_file(APP_PATH).run(timeout=10)
+    # Arm coffee
+    [b for b in at.sidebar.button if b.key == f"del_{coffee_id}"][0].click().run(timeout=10)
+    # Click tea's delete — should re-arm on tea, NOT delete coffee
+    [b for b in at.sidebar.button if b.key == f"del_{tea_id}"][0].click().run(timeout=10)
+
+    # Both rows still present; only one is armed now (tea).
+    assert get_job(coffee_id, db_path=db) is not None
+    assert get_job(tea_id, db_path=db) is not None
+
+
 def test_history_row_renders_both_load_and_rerun_buttons(monkeypatch, tmp_path):
     """When history exists, each row gets a main button + a 🔄 re-run button."""
     _patch_key(monkeypatch, None)

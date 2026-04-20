@@ -45,6 +45,7 @@ from seoserper.models import (
 from seoserper.fetchers.serp_cache import _cache_key
 from seoserper.storage import (
     cache_invalidate,
+    delete_job,
     get_job,
     init_db,
     list_recent_jobs,
@@ -104,6 +105,8 @@ def _ensure_session_state() -> None:
         ss._current_job_id = None
     if "_historical_job_id" not in ss:
         ss._historical_job_id = None
+    if "_delete_armed_job_id" not in ss:
+        ss._delete_armed_job_id = None
     if "_quota_caption" not in ss:
         # One-shot quota lookup per Streamlit session — the dashboard at
         # https://serpapi.com/manage-api-key is the source of truth for exact
@@ -256,14 +259,15 @@ def _render_history_sidebar() -> None:
                     _BADGES.get(s.status, "·") for s in job.surfaces.values()
                 )
                 mode_tag = "·S" if job.render_mode == "suggest-only" else ""
-                # Two-column row: main load button (wide) + re-run (narrow).
-                load_col, rerun_col = st.columns([5, 1])
+                # Three-column row: main load button + re-run + delete.
+                load_col, rerun_col, del_col = st.columns([4, 1, 1])
                 with load_col:
                     if st.button(
                         f"{label_line}\n{job.language}-{job.country} {badges}{mode_tag}",
                         key=f"hist_{job.id}", use_container_width=True,
                     ):
                         ss._historical_job_id = job.id
+                        ss._delete_armed_job_id = None
                 with rerun_col:
                     if st.button(
                         "🔄",
@@ -277,7 +281,38 @@ def _render_history_sidebar() -> None:
                         )
                         ss._current_job_id = new_id
                         ss._historical_job_id = None
+                        ss._delete_armed_job_id = None
                         st.rerun()
+                with del_col:
+                    # Two-click delete: first click arms; second click on the
+                    # same job confirms. Clicking any other job's 🗑️ re-arms
+                    # on that job (single-armed-at-a-time invariant).
+                    armed = ss.get("_delete_armed_job_id") == job.id
+                    if armed:
+                        if st.button(
+                            "⚠️",
+                            key=f"del_{job.id}",
+                            help="再点一次确认删除（不可恢复）",
+                            use_container_width=True,
+                            type="primary",
+                        ):
+                            delete_job(job.id, db_path=ss._db_path)
+                            ss._delete_armed_job_id = None
+                            if ss._current_job_id == job.id:
+                                ss._current_job_id = None
+                            if ss._historical_job_id == job.id:
+                                ss._historical_job_id = None
+                            st.toast(f"已删除 job #{job.id}: {job.query}", icon="🗑️")
+                            st.rerun()
+                    else:
+                        if st.button(
+                            "🗑️",
+                            key=f"del_{job.id}",
+                            help="点两次删除（第一次 arm，第二次执行）",
+                            use_container_width=True,
+                        ):
+                            ss._delete_armed_job_id = job.id
+                            st.rerun()
 
 
 def _render_current(job: AnalysisJob) -> None:

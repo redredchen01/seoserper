@@ -461,3 +461,33 @@ def test_migration_render_mode_is_idempotent(db_path: str):
     with storage.get_connection(db_path) as conn:
         cols = {r["name"] for r in conn.execute("PRAGMA table_info(jobs)")}
         assert "render_mode" in cols
+
+
+# --- delete_job (Unit L) -----------------------------------------------------
+
+
+def test_delete_job_removes_row_and_surfaces(db_path: str):
+    from seoserper.storage import delete_job, get_connection
+    jid = create_job("coffee", "en", "us", db_path=db_path)
+    update_surface(jid, SurfaceName.SUGGEST, SurfaceStatus.OK, items=[], db_path=db_path)
+
+    removed = delete_job(jid, db_path=db_path)
+    assert removed is True
+    assert get_job(jid, db_path=db_path) is None
+    with get_connection(db_path) as conn:
+        n = conn.execute("SELECT COUNT(*) FROM surfaces WHERE job_id = ?", (jid,)).fetchone()[0]
+        assert n == 0, "surface rows should cascade-delete"
+
+
+def test_delete_job_missing_id_returns_false(db_path: str):
+    from seoserper.storage import delete_job
+    assert delete_job(999999, db_path=db_path) is False
+
+
+def test_delete_job_leaves_siblings_untouched(db_path: str):
+    from seoserper.storage import delete_job
+    a = create_job("a", "en", "us", db_path=db_path)
+    b = create_job("b", "en", "us", db_path=db_path)
+    delete_job(a, db_path=db_path)
+    assert get_job(a, db_path=db_path) is None
+    assert get_job(b, db_path=db_path) is not None
