@@ -23,7 +23,12 @@ import streamlit as st
 
 from seoserper import config
 from seoserper.core.engine import AnalysisEngine, ProgressEvent
-from seoserper.export import build_filename, render_analysis_to_md
+from seoserper.export import (
+    build_csv_filename,
+    build_filename,
+    render_analysis_to_csv,
+    render_analysis_to_md,
+)
 from seoserper.fetchers.serp_cache import fetch_serp_data_cached
 from seoserper.serpapi_account import fetch_quota_info, format_quota_caption
 from seoserper.models import (
@@ -240,7 +245,7 @@ def _render_current(job: AnalysisJob) -> None:
         any_failed = any(
             s.status != SurfaceStatus.OK for s in job.surfaces.values()
         )
-        cols = st.columns(2)
+        cols = st.columns(3)
         with cols[0]:
             st.download_button(
                 "📄 导出 Markdown",
@@ -250,6 +255,14 @@ def _render_current(job: AnalysisJob) -> None:
                 use_container_width=True,
             )
         with cols[1]:
+            st.download_button(
+                "📊 导出 CSV",
+                data=render_analysis_to_csv(job).encode("utf-8"),
+                file_name=build_csv_filename(job),
+                mime="text/csv",
+                use_container_width=True,
+            )
+        with cols[2]:
             if any_failed:
                 if st.button("🔁 重跑失败版位", use_container_width=True):
                     engine = _boot_engine()

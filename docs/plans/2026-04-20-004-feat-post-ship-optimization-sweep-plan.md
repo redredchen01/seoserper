@@ -1,10 +1,11 @@
 ---
 title: "feat: Post-ship optimization sweep — parallel, cache, deadcode, UI polish, docs"
 type: feat
-status: active
+status: completed
 date: 2026-04-20
 origin: conversation-driven
 supersedes_none: true
+completed_commits: 516f20c 3e04cc6 8ce5473 fc5b9be
 ---
 
 # Post-Ship Optimization Sweep

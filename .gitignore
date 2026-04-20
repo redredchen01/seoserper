@@ -30,3 +30,7 @@ tests/fixtures/serp/**/*.html
 .idea/
 *.swp
 .DS_Store
+
+# local env overrides — never commit secrets
+.env
+.env.local

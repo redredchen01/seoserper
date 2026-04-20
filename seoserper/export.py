@@ -11,6 +11,8 @@ without clicking through (Design Principles: 失败状态内含诊断信息).
 from __future__ import annotations
 
 import base64
+import csv
+import io
 import re
 from datetime import datetime, timezone
 
@@ -105,6 +107,56 @@ def build_filename(analysis: AnalysisJob) -> str:
     slug = slugify(analysis.query)
     stamp = _filename_timestamp(analysis.started_at)
     return f"seoserper-{slug}-{analysis.language}-{analysis.country}-{stamp}.md"
+
+
+def build_csv_filename(analysis: AnalysisJob) -> str:
+    """Same slug+lang+country+stamp as MD, .csv extension."""
+    slug = slugify(analysis.query)
+    stamp = _filename_timestamp(analysis.started_at)
+    return f"seoserper-{slug}-{analysis.language}-{analysis.country}-{stamp}.csv"
+
+
+# CSV column order — stable across releases; downstream consumers rely on it.
+CSV_COLUMNS = ("surface", "rank", "text", "answer_preview")
+
+# UTF-8 BOM. Excel on Windows / macOS needs this to auto-detect UTF-8 encoding
+# for CJK content. LibreOffice / modern Excel handle BOM-less UTF-8 fine but
+# adding the BOM costs 3 bytes and prevents Chinese mojibake on older Excel.
+_UTF8_BOM = "\ufeff"
+
+
+def render_analysis_to_csv(analysis: AnalysisJob) -> str:
+    """Render an AnalysisJob as a UTF-8-BOM CSV string.
+
+    One row per (surface, rank) pair. OK surfaces emit items; EMPTY /
+    FAILED / RUNNING surfaces contribute zero data rows. The header row
+    is always emitted even for a completely empty job.
+
+    Column order is ``CSV_COLUMNS``. ``answer_preview`` is populated for
+    PAA rows only; empty string elsewhere.
+
+    Line endings: ``\\r\\n`` per RFC 4180 (stdlib csv default on POSIX is
+    ``\\r\\n`` when ``lineterminator`` is set explicitly — we set it).
+    """
+    buf = io.StringIO()
+    writer = csv.writer(buf, lineterminator="\r\n", quoting=csv.QUOTE_MINIMAL)
+    writer.writerow(CSV_COLUMNS)
+
+    for name in (SurfaceName.SUGGEST, SurfaceName.PAA, SurfaceName.RELATED):
+        surface = analysis.surfaces.get(name)
+        if surface is None or surface.status != SurfaceStatus.OK:
+            continue
+        for item in surface.items:
+            if name == SurfaceName.SUGGEST and isinstance(item, Suggestion):
+                writer.writerow([name.value, item.rank, item.text, ""])
+            elif name == SurfaceName.PAA and isinstance(item, PAAQuestion):
+                writer.writerow(
+                    [name.value, item.rank, item.question, item.answer_preview]
+                )
+            elif name == SurfaceName.RELATED and isinstance(item, RelatedSearch):
+                writer.writerow([name.value, item.rank, item.query, ""])
+
+    return _UTF8_BOM + buf.getvalue()
 
 
 def slugify(text: str, max_len: int = 60) -> str:
