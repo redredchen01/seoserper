@@ -88,8 +88,11 @@ SERPAPI_URL: str = "https://serpapi.com/search.json"
 # Users CAN still analyze other locales via direct DB manipulation; the UI
 # is opinionated for the quality-validated set only.
 SUPPORTED_LOCALES: tuple[tuple[str, str, str], ...] = (
-    ("en", "us", "English (US)"),
+    # 简体中文 is the primary user's default (session 2026-04-20). Order
+    # matters: Streamlit's selectbox defaults to options[0] so the first
+    # entry is what the user sees without any interaction.
     ("zh-CN", "cn", "简体中文 (CN)"),
+    ("en", "us", "English (US)"),
     ("zh-TW", "tw", "繁體中文 (TW)"),
     ("ja", "jp", "日本語 (JP)"),
 )
