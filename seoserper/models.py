@@ -91,4 +91,9 @@ class AnalysisJob:
     completed_at: str | None = None
     source_suggest: str = ""
     source_serp: str = ""
+    # "full" = 3-surface (suggest + paa + related), "suggest-only" = 1-surface.
+    # Stamped at create_job based on config.ENABLE_SERP_RENDER; insulates historical
+    # jobs from live flag mutation so a retry on a pre-pivot full-mode job never
+    # mutates into suggest-only mid-flight.
+    render_mode: str = "full"
     surfaces: dict[SurfaceName, SurfaceResult] = field(default_factory=dict)

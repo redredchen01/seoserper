@@ -338,3 +338,122 @@ def test_hydrate_all_three_item_types(db_path: str):
 
 def test_get_job_returns_none_for_missing(db_path: str):
     assert get_job(9999, db_path=db_path) is None
+
+
+# --- render_mode (suggest-only pivot, Unit 1) --------------------------------
+
+
+def test_create_job_defaults_to_full_render_mode(db_path: str):
+    jid = create_job("coffee", "en", "us", db_path=db_path)
+    job = get_job(jid, db_path=db_path)
+    assert job.render_mode == "full"
+    assert set(job.surfaces.keys()) == {
+        SurfaceName.SUGGEST,
+        SurfaceName.PAA,
+        SurfaceName.RELATED,
+    }
+
+
+def test_create_job_suggest_only_seeds_one_surface(db_path: str):
+    jid = create_job("coffee", "en", "us", db_path=db_path, render_mode="suggest-only")
+    job = get_job(jid, db_path=db_path)
+    assert job.render_mode == "suggest-only"
+    assert list(job.surfaces.keys()) == [SurfaceName.SUGGEST]
+    assert job.surfaces[SurfaceName.SUGGEST].status == SurfaceStatus.RUNNING
+
+
+def test_complete_job_on_suggest_only_uses_single_surface_rule(db_path: str):
+    jid = create_job("coffee", "en", "us", db_path=db_path, render_mode="suggest-only")
+    update_surface(
+        jid,
+        SurfaceName.SUGGEST,
+        SurfaceStatus.OK,
+        items=[Suggestion(text="coffee shop", rank=1)],
+        db_path=db_path,
+    )
+    final = complete_job(jid, db_path=db_path)
+    assert final == JobStatus.COMPLETED  # ok_count=1 >= 1 → completed
+
+
+def test_complete_job_suggest_only_failed_marks_failed(db_path: str):
+    jid = create_job("coffee", "en", "us", db_path=db_path, render_mode="suggest-only")
+    update_surface(
+        jid,
+        SurfaceName.SUGGEST,
+        SurfaceStatus.FAILED,
+        failure_category=FailureCategory.NETWORK_ERROR,
+        db_path=db_path,
+    )
+    final = complete_job(jid, db_path=db_path)
+    assert final == JobStatus.FAILED  # ok_count=0 → failed
+
+
+def test_list_recent_jobs_carries_render_mode(db_path: str):
+    jid_full = create_job("a", "en", "us", db_path=db_path)
+    update_surface(jid_full, SurfaceName.SUGGEST, SurfaceStatus.OK, items=[], db_path=db_path)
+    complete_job(jid_full, db_path=db_path)
+
+    jid_so = create_job("b", "en", "us", db_path=db_path, render_mode="suggest-only")
+    update_surface(jid_so, SurfaceName.SUGGEST, SurfaceStatus.OK, items=[], db_path=db_path)
+    complete_job(jid_so, db_path=db_path)
+
+    jobs = {j.id: j for j in list_recent_jobs(db_path=db_path)}
+    assert jobs[jid_full].render_mode == "full"
+    assert jobs[jid_so].render_mode == "suggest-only"
+
+
+def test_schema_v0_migration_adds_render_mode_column(tmp_path: Path):
+    """Legacy DB without render_mode column → init_db adds it with default 'full'."""
+    path = str(tmp_path / "legacy.db")
+    conn = sqlite3.connect(path)
+    # Simulate a v1-shaped DB (has source_suggest / source_serp) but NO render_mode
+    conn.executescript(
+        """
+        CREATE TABLE jobs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            query TEXT NOT NULL,
+            language TEXT NOT NULL,
+            country TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'running',
+            overall_status TEXT NOT NULL DEFAULT 'running',
+            started_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            completed_at TIMESTAMP,
+            source_suggest TEXT NOT NULL DEFAULT 'Google Suggest API',
+            source_serp TEXT NOT NULL DEFAULT 'Google Search Playwright'
+        );
+        CREATE TABLE surfaces (
+            job_id INTEGER,
+            surface TEXT,
+            status TEXT DEFAULT 'running',
+            failure_category TEXT,
+            data_json TEXT NOT NULL DEFAULT '[]',
+            rank_count INTEGER NOT NULL DEFAULT 0,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY(job_id, surface)
+        );
+        """
+    )
+    conn.execute(
+        "INSERT INTO jobs (query, language, country) VALUES ('legacy', 'en', 'us')"
+    )
+    conn.commit()
+    conn.close()
+
+    init_db(path)
+
+    with storage.get_connection(path) as conn:
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(jobs)")}
+        assert "render_mode" in cols
+        row = conn.execute(
+            "SELECT render_mode FROM jobs WHERE query='legacy'"
+        ).fetchone()
+        assert row["render_mode"] == "full"
+
+
+def test_migration_render_mode_is_idempotent(db_path: str):
+    """Running init_db twice on a fresh DB must not break the render_mode column."""
+    # db_path fixture already ran init_db once; run again
+    storage.init_db(db_path)
+    with storage.get_connection(db_path) as conn:
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(jobs)")}
+        assert "render_mode" in cols

@@ -42,7 +42,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     started_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     completed_at TIMESTAMP,
     source_suggest TEXT NOT NULL DEFAULT 'Google Suggest API',
-    source_serp TEXT NOT NULL DEFAULT 'Google Search Playwright'
+    source_serp TEXT NOT NULL DEFAULT 'Google Search Playwright',
+    render_mode TEXT NOT NULL DEFAULT 'full'
 );
 
 CREATE INDEX IF NOT EXISTS idx_jobs_created ON jobs(started_at DESC);
@@ -80,8 +81,9 @@ def init_db(db_path: str | None = None) -> str:
             current = conn.execute("PRAGMA user_version").fetchone()[0]
             conn.executescript(SCHEMA)
             # Idempotent additive migrations for legacy v0 databases that
-            # predate source_suggest / source_serp on jobs.
+            # predate source_suggest / source_serp / render_mode on jobs.
             _migrate_jobs_add_source_columns(conn)
+            _migrate_jobs_add_render_mode(conn)
             if current < config.SCHEMA_VERSION:
                 conn.execute(f"PRAGMA user_version = {config.SCHEMA_VERSION}")
     return path
@@ -101,6 +103,25 @@ def _migrate_jobs_add_source_columns(conn: sqlite3.Connection) -> None:
         if "source_serp" not in cols:
             conn.execute(
                 "ALTER TABLE jobs ADD COLUMN source_serp TEXT NOT NULL DEFAULT 'Google Search Playwright'"
+            )
+        conn.commit()
+    except sqlite3.OperationalError as exc:
+        conn.rollback()
+        if "duplicate column" not in str(exc).lower():
+            raise
+
+
+def _migrate_jobs_add_render_mode(conn: sqlite3.Connection) -> None:
+    """Add jobs.render_mode column if missing. Pre-existing rows default to 'full'."""
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)")}
+    if "render_mode" in cols:
+        return
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        cols = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)")}
+        if "render_mode" not in cols:
+            conn.execute(
+                "ALTER TABLE jobs ADD COLUMN render_mode TEXT NOT NULL DEFAULT 'full'"
             )
         conn.commit()
     except sqlite3.OperationalError as exc:
@@ -132,18 +153,45 @@ def get_connection(db_path: str | None = None):
 # --- CRUD ---
 
 
-def create_job(query: str, language: str, country: str, db_path: str | None = None) -> int:
-    """INSERT a job (status=running) + seed 3 surface rows (status=running)."""
+def create_job(
+    query: str,
+    language: str,
+    country: str,
+    db_path: str | None = None,
+    *,
+    render_mode: str = "full",
+) -> int:
+    """INSERT a job + seed surface rows. `render_mode` controls the surface count.
+
+    - "full"         → 3 rows (suggest / paa / related), all status=running
+    - "suggest-only" → 1 row (suggest only), status=running
+
+    `db_path` stays positional-or-keyword so existing callers keep working;
+    `render_mode` is keyword-only to force explicit use.
+    """
+    if render_mode == "suggest-only":
+        surfaces_to_seed = [SurfaceName.SUGGEST]
+    else:
+        surfaces_to_seed = list(SurfaceName)
+
     with get_connection(db_path) as conn:
         cursor = conn.execute(
-            "INSERT INTO jobs (query, language, country, source_suggest, source_serp) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (query, language, country, config.SOURCE_SUGGEST, config.SOURCE_SERP),
+            "INSERT INTO jobs "
+            "(query, language, country, source_suggest, source_serp, render_mode) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                query,
+                language,
+                country,
+                config.SOURCE_SUGGEST,
+                config.SOURCE_SERP,
+                render_mode,
+            ),
         )
         job_id = cursor.lastrowid
         conn.executemany(
             "INSERT INTO surfaces (job_id, surface, status) VALUES (?, ?, 'running')",
-            [(job_id, s.value) for s in SurfaceName],
+            [(job_id, s.value) for s in surfaces_to_seed],
         )
     assert job_id is not None
     return job_id
@@ -217,7 +265,7 @@ def list_recent_jobs(
         SELECT
             j.id, j.query, j.language, j.country,
             j.status, j.overall_status, j.started_at, j.completed_at,
-            j.source_suggest, j.source_serp,
+            j.source_suggest, j.source_serp, j.render_mode,
             GROUP_CONCAT(
                 s.surface || '|' || s.status || '|' || s.rank_count || '|' ||
                 COALESCE(s.failure_category, ''),
@@ -289,6 +337,7 @@ def _hydrate_job(job_row: sqlite3.Row, surface_rows: list[sqlite3.Row]) -> Analy
         completed_at=job_row["completed_at"],
         source_suggest=job_row["source_suggest"],
         source_serp=job_row["source_serp"],
+        render_mode=job_row["render_mode"],
         surfaces=surfaces,
     )
 
@@ -322,6 +371,7 @@ def _hydrate_job_from_blob(row: sqlite3.Row) -> AnalysisJob:
         completed_at=row["completed_at"],
         source_suggest=row["source_suggest"],
         source_serp=row["source_serp"],
+        render_mode=row["render_mode"],
         surfaces=surfaces,
     )
 
