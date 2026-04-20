@@ -338,7 +338,7 @@ flowchart TB
 
 ---
 
-- [ ] **Unit 3: Playwright RenderThread 基础设施**
+- [x] **Unit 3: Playwright RenderThread 基础设施** (42/42 tests ✓; ported from claude-crawler-clean + 5-class typed exception hierarchy + consent/captcha/rate-limit DOM probes + restart-by-count and restart-by-time policy)
 
 **Goal:** 移植 claude-crawler 的 RenderThread 到 SEOSERPER，负责浏览器生命周期、submit/Future、consent+captcha 检测、crash recovery、restart policy、atexit watchdog、preflight。
 
