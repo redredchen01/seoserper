@@ -11,7 +11,7 @@ Solo-operator tool, self-use. No account, no cloud, no CI.
 | **Full** | `SERPAPI_KEY` set | Suggestions (free) + PAA + Related (via SerpAPI, 1 search/submit) |
 | **Suggest-only** | `SERPAPI_KEY` unset (default) | Suggestions only — no quota cost |
 
-SerpAPI free tier is 100 searches/month, no credit card. See `seoserper/config.py` module docstring for the full setup + locale + quota details.
+SerpAPI free tier is ~100-250 searches/month (depends on your plan — check https://serpapi.com/manage-api-key). No credit card. See `seoserper/config.py` module docstring for the full setup + locale + quota details.
 
 ## Quick start
 

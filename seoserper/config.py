@@ -14,9 +14,12 @@ direct HTML scraping of ``google.com/search`` is not viable from this network.
 
 To enable Full mode (Suggest + PAA + Related):
 
-  1. Sign up at https://serpapi.com — the free tier is 100 searches/month,
-     no credit card required. One Full analysis costs exactly 1 SerpAPI
-     search (PAA + Related come bundled in a single ``engine=google`` call).
+  1. Sign up at https://serpapi.com — free tier allocates somewhere around
+     100-250 searches/month depending on plan / trial state (confirmed
+     2026-04-20: one account saw 250/month). Check your actual ceiling at
+     https://serpapi.com/manage-api-key. No credit card required. One Full
+     analysis costs exactly 1 SerpAPI search (PAA + Related come bundled
+     in a single ``engine=google`` call).
   2. ``export SERPAPI_KEY=<your-key>`` in the shell before starting
      Streamlit. Empty-string and whitespace-only values are treated as
      unset; the key is stripped before use.
