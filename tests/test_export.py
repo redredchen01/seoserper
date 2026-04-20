@@ -410,7 +410,7 @@ def test_suggest_only_body_has_single_h2():
 def test_suggest_only_empty_renders_empty_message():
     job = _suggest_only_job(items=[], status=SurfaceStatus.EMPTY)
     md = render_analysis_to_md(job)
-    assert "_No suggestions returned._" in md
+    assert "Google Autocomplete returned no suggestions" in md
     assert md.count("\n## ") == 1
 
 

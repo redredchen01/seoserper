@@ -33,9 +33,18 @@ SURFACE_HEADINGS: dict[SurfaceName, str] = {
 }
 
 SURFACE_EMPTY_MESSAGES: dict[SurfaceName, str] = {
-    SurfaceName.SUGGEST: "_No suggestions returned._",
-    SurfaceName.PAA: "_No People Also Ask questions returned._",
-    SurfaceName.RELATED: "_No related searches returned for this query._",
+    SurfaceName.SUGGEST: (
+        "_Google Autocomplete returned no suggestions (sensitive term, "
+        "cold tail, or content-policy filter on Google's side)._"
+    ),
+    SurfaceName.PAA: (
+        "_Google did not surface a People Also Ask block for this query. "
+        "This is upstream behavior (Google's UI), not a tool error._"
+    ),
+    SurfaceName.RELATED: (
+        "_Google did not surface a Related Searches block for this query. "
+        "This is upstream behavior (Google's UI), not a tool error._"
+    ),
 }
 
 FAILURE_DIAGNOSTIC_ZH: dict[FailureCategory, str] = {

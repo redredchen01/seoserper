@@ -71,6 +71,22 @@ _FAILURE_MSG = {
     FailureCategory.NETWORK_ERROR: "网络错误 — 检查连接 / API key",
 }
 
+# Per-surface EMPTY copy — distinguishes upstream silence from tool bugs.
+# Before: all three surfaces shared one generic line "该查询无返回内容" which
+# users naturally read as "tool broken". These lines name the upstream cause
+# so a legitimate empty response looks like a legitimate empty response.
+_EMPTY_MSG = {
+    SurfaceName.SUGGEST: (
+        "Google 自动补全未返回建议（常见于敏感词、冷门长尾、或 Google 内容政策过滤）"
+    ),
+    SurfaceName.PAA: (
+        "Google 未在此查询触发 People Also Ask 版位（Google 侧不展示，非 SerpAPI 或本工具异常）"
+    ),
+    SurfaceName.RELATED: (
+        "Google 未在此查询触发 Related Searches 版位（Google 侧不展示，非 SerpAPI 或本工具异常）"
+    ),
+}
+
 
 def _full_mode_available() -> bool:
     return config.SERPAPI_KEY is not None
@@ -163,7 +179,7 @@ def _render_surface(job: AnalysisJob, name: SurfaceName) -> None:
     st.markdown(f"### {badge} {label}{count_suffix}")
 
     if surface.status == SurfaceStatus.EMPTY:
-        st.caption("该查询无返回内容")
+        st.caption(_EMPTY_MSG.get(name, "该查询无返回内容"))
         return
     if surface.status == SurfaceStatus.FAILED:
         msg = _FAILURE_MSG.get(surface.failure_category, "未知失败")
