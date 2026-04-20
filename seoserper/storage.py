@@ -43,7 +43,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     completed_at TIMESTAMP,
     source_suggest TEXT NOT NULL DEFAULT 'Google Suggest API',
     source_serp TEXT NOT NULL DEFAULT 'SerpAPI',
-    render_mode TEXT NOT NULL DEFAULT 'full'
+    render_mode TEXT NOT NULL DEFAULT 'full',
+    engine TEXT NOT NULL DEFAULT 'google'
 );
 
 CREATE INDEX IF NOT EXISTS idx_jobs_created ON jobs(started_at DESC);
@@ -93,6 +94,7 @@ def init_db(db_path: str | None = None) -> str:
             # predate source_suggest / source_serp / render_mode on jobs.
             _migrate_jobs_add_source_columns(conn)
             _migrate_jobs_add_render_mode(conn)
+            _migrate_jobs_add_engine(conn)
             if current < config.SCHEMA_VERSION:
                 conn.execute(f"PRAGMA user_version = {config.SCHEMA_VERSION}")
     return path
@@ -139,6 +141,25 @@ def _migrate_jobs_add_render_mode(conn: sqlite3.Connection) -> None:
             raise
 
 
+def _migrate_jobs_add_engine(conn: sqlite3.Connection) -> None:
+    """Add jobs.engine column if missing. Pre-plan-005 rows default to 'google'."""
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)")}
+    if "engine" in cols:
+        return
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        cols = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)")}
+        if "engine" not in cols:
+            conn.execute(
+                "ALTER TABLE jobs ADD COLUMN engine TEXT NOT NULL DEFAULT 'google'"
+            )
+        conn.commit()
+    except sqlite3.OperationalError as exc:
+        conn.rollback()
+        if "duplicate column" not in str(exc).lower():
+            raise
+
+
 @contextmanager
 def get_connection(db_path: str | None = None):
     """Short-lived connection with WAL + busy_timeout + row_factory=Row."""
@@ -169,16 +190,22 @@ def create_job(
     db_path: str | None = None,
     *,
     render_mode: str = "full",
+    engine: str = "google",
 ) -> int:
-    """INSERT a job + seed surface rows. `render_mode` controls the surface count.
+    """INSERT a job + seed surface rows. engine × render_mode control surfaces.
 
-    - "full"         → 3 rows (suggest / paa / related), all status=running
-    - "suggest-only" → 1 row (suggest only), status=running
+    Seeding matrix (plan 005 Unit 1):
+      - engine="google",  render_mode="full"         → SUGGEST + PAA + RELATED
+      - engine="google",  render_mode="suggest-only" → SUGGEST only
+      - engine="bing",    render_mode=*              → PAA + RELATED (no SUGGEST,
+        Bing lacks a public/free autocomplete endpoint)
 
-    `db_path` stays positional-or-keyword so existing callers keep working;
-    `render_mode` is keyword-only to force explicit use.
+    Engine is orthogonal to render_mode; both are stored immutably so
+    retries + historical hydration stay self-consistent.
     """
-    if render_mode == "suggest-only":
+    if engine == "bing":
+        surfaces_to_seed = [SurfaceName.PAA, SurfaceName.RELATED]
+    elif render_mode == "suggest-only":
         surfaces_to_seed = [SurfaceName.SUGGEST]
     else:
         surfaces_to_seed = list(SurfaceName)
@@ -186,8 +213,9 @@ def create_job(
     with get_connection(db_path) as conn:
         cursor = conn.execute(
             "INSERT INTO jobs "
-            "(query, language, country, source_suggest, source_serp, render_mode) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "(query, language, country, source_suggest, source_serp, "
+            " render_mode, engine) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
                 query,
                 language,
@@ -195,6 +223,7 @@ def create_job(
                 config.SOURCE_SUGGEST,
                 config.SOURCE_SERP,
                 render_mode,
+                engine,
             ),
         )
         job_id = cursor.lastrowid
@@ -274,7 +303,7 @@ def list_recent_jobs(
         SELECT
             j.id, j.query, j.language, j.country,
             j.status, j.overall_status, j.started_at, j.completed_at,
-            j.source_suggest, j.source_serp, j.render_mode,
+            j.source_suggest, j.source_serp, j.render_mode, j.engine,
             GROUP_CONCAT(
                 s.surface || '|' || s.status || '|' || s.rank_count || '|' ||
                 COALESCE(s.failure_category, ''),
@@ -347,6 +376,7 @@ def _hydrate_job(job_row: sqlite3.Row, surface_rows: list[sqlite3.Row]) -> Analy
         source_suggest=job_row["source_suggest"],
         source_serp=job_row["source_serp"],
         render_mode=job_row["render_mode"],
+        engine=job_row["engine"],
         surfaces=surfaces,
     )
 
@@ -381,6 +411,7 @@ def _hydrate_job_from_blob(row: sqlite3.Row) -> AnalysisJob:
         source_suggest=row["source_suggest"],
         source_serp=row["source_serp"],
         render_mode=row["render_mode"],
+        engine=row["engine"],
         surfaces=surfaces,
     )
 

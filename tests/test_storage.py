@@ -491,3 +491,89 @@ def test_delete_job_leaves_siblings_untouched(db_path: str):
     delete_job(a, db_path=db_path)
     assert get_job(a, db_path=db_path) is None
     assert get_job(b, db_path=db_path) is not None
+
+
+# --- engine column (plan 005 Unit 1) -----------------------------------------
+
+
+def test_create_job_default_engine_is_google(db_path: str):
+    jid = create_job("coffee", "en", "us", db_path=db_path)
+    job = get_job(jid, db_path=db_path)
+    assert job.engine == "google"
+
+
+def test_create_job_explicit_engine_bing_seeds_two_surfaces(db_path: str):
+    jid = create_job("coffee", "en", "us", db_path=db_path, engine="bing")
+    job = get_job(jid, db_path=db_path)
+    assert job.engine == "bing"
+    # Bing: no SUGGEST row, only PAA + RELATED.
+    assert set(job.surfaces.keys()) == {SurfaceName.PAA, SurfaceName.RELATED}
+    assert SurfaceName.SUGGEST not in job.surfaces
+    for s in job.surfaces.values():
+        assert s.status == SurfaceStatus.RUNNING
+
+
+def test_create_job_google_suggest_only_still_works(db_path: str):
+    """Regression: Bing branch must not steal the suggest-only path."""
+    jid = create_job("coffee", "en", "us", db_path=db_path, render_mode="suggest-only")
+    job = get_job(jid, db_path=db_path)
+    assert job.engine == "google"
+    assert list(job.surfaces.keys()) == [SurfaceName.SUGGEST]
+
+
+def test_list_recent_jobs_hydrates_engine(db_path: str):
+    jid_g = create_job("coffee", "en", "us", db_path=db_path)
+    jid_b = create_job("tea", "en", "us", db_path=db_path, engine="bing")
+    from seoserper.storage import update_surface
+    update_surface(jid_g, SurfaceName.SUGGEST, SurfaceStatus.OK, items=[], db_path=db_path)
+    update_surface(jid_b, SurfaceName.PAA, SurfaceStatus.OK, items=[], db_path=db_path)
+    complete_job(jid_g, db_path=db_path)
+    complete_job(jid_b, db_path=db_path)
+    engines = {j.id: j.engine for j in list_recent_jobs(db_path=db_path)}
+    assert engines.get(jid_g) == "google"
+    assert engines.get(jid_b) == "bing"
+
+
+def test_schema_v0_migration_adds_engine_column(tmp_path: Path):
+    """Pre-plan-005 DB (no engine column) gets the column + 'google' default."""
+    path = str(tmp_path / "legacy.db")
+    with sqlite3.connect(path) as conn:
+        # Mimic a schema before plan 005 — includes render_mode but no engine.
+        conn.executescript(
+            """
+            CREATE TABLE jobs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                query TEXT NOT NULL,
+                language TEXT NOT NULL,
+                country TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'running',
+                overall_status TEXT NOT NULL DEFAULT 'running',
+                started_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                completed_at TIMESTAMP,
+                source_suggest TEXT NOT NULL DEFAULT 'Google Suggest API',
+                source_serp TEXT NOT NULL DEFAULT 'SerpAPI',
+                render_mode TEXT NOT NULL DEFAULT 'full'
+            );
+            CREATE TABLE surfaces (
+                job_id INTEGER NOT NULL,
+                surface TEXT NOT NULL,
+                status TEXT NOT NULL,
+                failure_category TEXT,
+                data_json TEXT NOT NULL DEFAULT '[]',
+                rank_count INTEGER NOT NULL DEFAULT 0,
+                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (job_id, surface)
+            );
+            INSERT INTO jobs (query, language, country) VALUES ('pre-p5', 'en', 'us');
+            """
+        )
+
+    init_db(path)
+
+    with storage.get_connection(path) as conn:
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(jobs)")}
+        assert "engine" in cols
+        row = conn.execute(
+            "SELECT engine FROM jobs WHERE query = 'pre-p5'"
+        ).fetchone()
+        assert row["engine"] == "google"

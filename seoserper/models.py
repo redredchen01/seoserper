@@ -91,8 +91,12 @@ class AnalysisJob:
     source_suggest: str = ""
     source_serp: str = ""
     # "full" = 3-surface (suggest + paa + related), "suggest-only" = 1-surface.
-    # Stamped at create_job based on config.ENABLE_SERP_RENDER; insulates historical
-    # jobs from live flag mutation so a retry on a pre-pivot full-mode job never
-    # mutates into suggest-only mid-flight.
+    # Stamped at create_job based on config.SERPAPI_KEY; insulates historical
+    # jobs from live config mutation so a retry on a pre-pivot full-mode job
+    # never mutates mid-flight.
     render_mode: str = "full"
+    # "google" (default; pre-plan-005 rows auto-tag via migration) or "bing".
+    # Orthogonal to render_mode. Bing jobs always seed 2 surfaces (PAA +
+    # RELATED) since Bing has no public autocomplete endpoint.
+    engine: str = "google"
     surfaces: dict[SurfaceName, SurfaceResult] = field(default_factory=dict)
