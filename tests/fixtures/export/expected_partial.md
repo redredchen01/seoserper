@@ -2,6 +2,7 @@
 query: 长尾中文查询示例
 language: zh
 country: cn
+render_mode: full
 timestamp: 2026-04-20T14:30:00Z
 source_suggest: Google Suggest API
 source_serp: Google Search Playwright

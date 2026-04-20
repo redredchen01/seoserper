@@ -341,3 +341,99 @@ def test_render_does_no_io(tmp_path, monkeypatch):
                           SurfaceName.RELATED: _ok_related()})
     render_analysis_to_md(job)
     assert forbidden_calls == []
+
+
+# --- suggest-only mode (Unit 3 of pivot plan 2026-04-20-002) -----------------
+
+
+def _suggest_only_job(
+    query: str = "python decorators",
+    items: list | None = None,
+    status: SurfaceStatus = SurfaceStatus.OK,
+    failure_category: FailureCategory | None = None,
+) -> AnalysisJob:
+    return AnalysisJob(
+        id=4,
+        query=query,
+        language="en",
+        country="us",
+        status=JobStatus.COMPLETED,
+        overall_status=JobStatus.COMPLETED,
+        started_at=STAMP,
+        source_suggest="Google Suggest API",
+        source_serp="Google Search Playwright",
+        render_mode="suggest-only",
+        surfaces={
+            SurfaceName.SUGGEST: SurfaceResult(
+                surface=SurfaceName.SUGGEST,
+                status=status,
+                items=items or [],
+                rank_count=len(items or []),
+                failure_category=failure_category,
+            ),
+        },
+    )
+
+
+def test_suggest_only_matches_golden():
+    job = _suggest_only_job(
+        items=[
+            Suggestion(text="python decorators", rank=1),
+            Suggestion(text="python decorators example", rank=2),
+            Suggestion(text="python decorators explained", rank=3),
+        ]
+    )
+    expected = (FIXTURES / "expected_suggest_only.md").read_text()
+    assert render_analysis_to_md(job) == expected
+
+
+def test_suggest_only_frontmatter_omits_paa_and_related_status_keys():
+    job = _suggest_only_job(items=[Suggestion(text="x", rank=1)])
+    md = render_analysis_to_md(job)
+    assert "render_mode: suggest-only" in md
+    assert "status_suggestions: ok" in md
+    assert "status_paa:" not in md
+    assert "status_related:" not in md
+    assert "source_serp:" not in md  # source_serp also omitted since no SERP run
+
+
+def test_suggest_only_body_has_single_h2():
+    job = _suggest_only_job(items=[Suggestion(text="x", rank=1)])
+    md = render_analysis_to_md(job)
+    # Exactly one "## " heading (the Suggestions section)
+    assert md.count("\n## ") == 1
+    assert "## Suggestions (1)" in md
+    assert "## People Also Ask" not in md
+    assert "## Related Searches" not in md
+
+
+def test_suggest_only_empty_renders_empty_message():
+    job = _suggest_only_job(items=[], status=SurfaceStatus.EMPTY)
+    md = render_analysis_to_md(job)
+    assert "_No suggestions returned._" in md
+    assert md.count("\n## ") == 1
+
+
+def test_suggest_only_failed_renders_diagnostic():
+    job = _suggest_only_job(
+        status=SurfaceStatus.FAILED,
+        failure_category=FailureCategory.NETWORK_ERROR,
+    )
+    md = render_analysis_to_md(job)
+    assert "Suggestions 获取失败: 网络错误" in md
+
+
+def test_full_mode_frontmatter_still_has_render_mode_full():
+    job = _job(
+        surfaces={
+            SurfaceName.SUGGEST: _ok_suggest(),
+            SurfaceName.PAA: _ok_paa(),
+            SurfaceName.RELATED: _ok_related(),
+        }
+    )
+    md = render_analysis_to_md(job)
+    assert "render_mode: full" in md
+    # Full mode keeps all three status keys
+    assert "status_suggestions: ok" in md
+    assert "status_paa: ok" in md
+    assert "status_related: ok" in md
