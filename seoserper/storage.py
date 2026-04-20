@@ -8,6 +8,7 @@ no WriterThread is needed (plan §Key Decisions).
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sqlite3
 import threading
@@ -67,6 +68,17 @@ CREATE TABLE IF NOT EXISTS surfaces (
 CREATE TABLE IF NOT EXISTS serp_cache (
     cache_key TEXT PRIMARY KEY,
     response_json TEXT NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Plan 005 Unit 2. Suggest library response cache keyed by
+-- (engine, normalized_q, hl, gl). `status` is an explicit column so the
+-- status-aware TTL (12h for OK, 5min for EMPTY) is a plain SQL filter, no
+-- json_extract needed. FAILED results are NEVER cached (see suggest_cache_put).
+CREATE TABLE IF NOT EXISTS suggest_cache (
+    cache_key TEXT PRIMARY KEY,
+    response_json TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('ok', 'empty')),
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 """
@@ -508,6 +520,90 @@ def cache_invalidate(cache_key: str, db_path: str | None = None) -> int:
             "DELETE FROM serp_cache WHERE cache_key = ?", (cache_key,)
         )
         return cursor.rowcount
+
+
+# --- Suggest library response cache (plan 005 Unit 2) ------------------------
+
+
+def suggest_cache_get(
+    cache_key: str,
+    ttl_ok_seconds: int,
+    ttl_empty_seconds: int,
+    db_path: str | None = None,
+) -> dict | None:
+    """Return the cached suggest payload if fresh for its status, else None.
+
+    Status-aware TTL: an `ok` row is fresh for ``ttl_ok_seconds``; an `empty`
+    row only for ``ttl_empty_seconds`` (shorter so recovery from upstream
+    unavailability is instantly visible on next call).
+
+    Malformed JSON rows emit a warning, are deleted, and return None —
+    distinguishes corruption from a plain miss without exposing it to the
+    caller. Mirrors the defensive posture of cache_get.
+    """
+    logger = logging.getLogger("seoserper.storage")
+    with get_connection(db_path) as conn:
+        row = conn.execute(
+            "SELECT response_json, status FROM suggest_cache "
+            "WHERE cache_key = ? "
+            "  AND ( "
+            "    (status = 'ok' AND created_at >= datetime('now', ?)) "
+            "    OR "
+            "    (status = 'empty' AND created_at >= datetime('now', ?)) "
+            "  )",
+            (
+                cache_key,
+                f"-{ttl_ok_seconds} seconds",
+                f"-{ttl_empty_seconds} seconds",
+            ),
+        ).fetchone()
+        if row is None:
+            return None
+        try:
+            payload = json.loads(row["response_json"])
+        except json.JSONDecodeError:
+            logger.warning(
+                "suggest_cache: malformed row deleted",
+                extra={"cache_key": cache_key},
+            )
+            conn.execute(
+                "DELETE FROM suggest_cache WHERE cache_key = ?", (cache_key,)
+            )
+            return None
+    return {"status": row["status"], "items": payload.get("items", [])}
+
+
+def suggest_cache_put(
+    cache_key: str,
+    status: str,
+    items: list[dict],
+    db_path: str | None = None,
+    *,
+    ttl_seconds: int | None = None,
+) -> None:
+    """Store a suggest cache row. Overwrites any existing row for the key.
+
+    ``status`` must be 'ok' or 'empty' (enforced by the table's CHECK
+    constraint). FAILED/degraded results are NEVER cached — the library's
+    call site is responsible for skipping this function on that path.
+
+    When ``ttl_seconds`` is provided, opportunistically prune rows older
+    than that window on the same transaction — keeps the table bounded
+    without a cron, mirrors cache_put.
+    """
+    body = json.dumps({"items": items}, ensure_ascii=False)
+    with get_connection(db_path) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO suggest_cache "
+            "(cache_key, response_json, status, created_at) "
+            "VALUES (?, ?, ?, CURRENT_TIMESTAMP)",
+            (cache_key, body, status),
+        )
+        if ttl_seconds is not None:
+            conn.execute(
+                "DELETE FROM suggest_cache WHERE created_at < datetime('now', ?)",
+                (f"-{ttl_seconds} seconds",),
+            )
 
 
 def delete_job(job_id: int, db_path: str | None = None) -> bool:
