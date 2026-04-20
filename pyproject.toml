@@ -9,9 +9,6 @@ description = "Local-first Google SERP analyzer (Suggestions / PAA / Related Sea
 requires-python = ">=3.10"
 dependencies = [
     "requests>=2.31",
-    "beautifulsoup4>=4.12",
-    "lxml>=5.0",
-    "playwright>=1.40",
     "streamlit>=1.30",
 ]
 

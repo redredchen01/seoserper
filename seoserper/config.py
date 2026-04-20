@@ -83,14 +83,9 @@ SOURCE_SERP = "SerpAPI"
 
 # Timeouts
 SUGGEST_TIMEOUT_SECONDS = 5.0
-RENDER_TIMEOUT_SECONDS = 30.0
 # SerpAPI calls include Google-side scraping on the provider's servers, so
 # end-to-end latency is typically 2-6s; 15s leaves headroom for slow months.
 SERPAPI_TIMEOUT_SECONDS = 15.0
-
-# Playwright RSS control — removed in Unit 6 alongside render.py deletion.
-BROWSER_RESTART_AFTER_QUERIES = 50
-BROWSER_RESTART_AFTER_SECONDS = 3600
 
 # Sweep threshold for `running` jobs left behind by a process crash (R14 tail cleanup).
 ORPHAN_RUNNING_MINUTES = 30
