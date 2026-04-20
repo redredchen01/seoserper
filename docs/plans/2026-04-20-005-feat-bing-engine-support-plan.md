@@ -1,10 +1,11 @@
 ---
 title: "feat: Bing engine support — multi-engine jobs via SerpAPI"
 type: feat
-status: active
+status: completed
 date: 2026-04-20
 origin: conversation-driven (user ask "目前只有google能否新增bing＆yandex" + research)
 supersedes_none: true
+completed_commits: 93a8d30 f1b1bec 033f281 fd63f11 171833f 8bb0d3d
 ---
 
 # Bing Engine Support

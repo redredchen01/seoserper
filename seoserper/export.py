@@ -32,20 +32,28 @@ SURFACE_HEADINGS: dict[SurfaceName, str] = {
     SurfaceName.RELATED: "Related Searches",
 }
 
-SURFACE_EMPTY_MESSAGES: dict[SurfaceName, str] = {
+SURFACE_EMPTY_TEMPLATES: dict[SurfaceName, str] = {
     SurfaceName.SUGGEST: (
         "_Google Autocomplete returned no suggestions (sensitive term, "
         "cold tail, or content-policy filter on Google's side)._"
     ),
     SurfaceName.PAA: (
-        "_Google did not surface a People Also Ask block for this query. "
-        "This is upstream behavior (Google's UI), not a tool error._"
+        "_{engine_label} did not surface a People Also Ask block for this "
+        "query. This is upstream behavior ({engine_label}'s UI), not a tool error._"
     ),
     SurfaceName.RELATED: (
-        "_Google did not surface a Related Searches block for this query. "
-        "This is upstream behavior (Google's UI), not a tool error._"
+        "_{engine_label} did not surface a Related Searches block for this "
+        "query. This is upstream behavior ({engine_label}'s UI), not a tool error._"
     ),
 }
+
+_EXPORT_ENGINE_LABEL = {"google": "Google", "bing": "Bing"}
+
+
+def _empty_message(name: SurfaceName, engine: str) -> str:
+    tmpl = SURFACE_EMPTY_TEMPLATES.get(name, "_No data._")
+    label = _EXPORT_ENGINE_LABEL.get(engine, engine)
+    return tmpl.format(engine_label=label)
 
 FAILURE_DIAGNOSTIC_ZH: dict[FailureCategory, str] = {
     FailureCategory.BLOCKED_RATE_LIMIT: "被限流（SerpAPI 配额用尽 或 Suggest 限流）—— 建议等 quota 重置或 5 分钟后重试",
@@ -204,7 +212,7 @@ def _render_section(analysis: AnalysisJob, name: SurfaceName) -> list[str]:
         return [f"## {heading}", "", "_Pending._"]
 
     if surface.status == SurfaceStatus.EMPTY:
-        return [f"## {heading}", "", SURFACE_EMPTY_MESSAGES[name]]
+        return [f"## {heading}", "", _empty_message(name, analysis.engine)]
 
     if surface.status == SurfaceStatus.FAILED:
         diagnostic = FAILURE_DIAGNOSTIC_ZH.get(
@@ -226,6 +234,13 @@ def _render_section(analysis: AnalysisJob, name: SurfaceName) -> list[str]:
     for item in surface.items:
         out.append(_render_item(name, item))
     return out
+
+
+# Backwards-compat alias — tests and external references may still look up
+# the old constant. Maps to the google-labelled variant for each surface.
+SURFACE_EMPTY_MESSAGES: dict[SurfaceName, str] = {
+    name: _empty_message(name, "google") for name in SurfaceName
+}
 
 
 def _render_item(name: SurfaceName, item: object) -> str:

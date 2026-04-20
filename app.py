@@ -73,20 +73,30 @@ _FAILURE_MSG = {
 }
 
 # Per-surface EMPTY copy — distinguishes upstream silence from tool bugs.
-# Before: all three surfaces shared one generic line "该查询无返回内容" which
-# users naturally read as "tool broken". These lines name the upstream cause
-# so a legitimate empty response looks like a legitimate empty response.
-_EMPTY_MSG = {
+# Templated on engine so Bing jobs read "Bing" in the copy, not "Google"
+# (plan 005 fix post-Bing-integration).
+_EMPTY_MSG_TEMPLATES = {
+    # SUGGEST is Google-only; Bing never has a SUGGEST surface so no Bing variant.
     SurfaceName.SUGGEST: (
         "Google 自动补全未返回建议（常见于敏感词、冷门长尾、或 Google 内容政策过滤）"
     ),
     SurfaceName.PAA: (
-        "Google 未在此查询触发 People Also Ask 版位（Google 侧不展示，非 SerpAPI 或本工具异常）"
+        "{engine_label} 未在此查询触发 People Also Ask 版位（{engine_label} 侧不展示，非 SerpAPI 或本工具异常）"
     ),
     SurfaceName.RELATED: (
-        "Google 未在此查询触发 Related Searches 版位（Google 侧不展示，非 SerpAPI 或本工具异常）"
+        "{engine_label} 未在此查询触发 Related Searches 版位（{engine_label} 侧不展示，非 SerpAPI 或本工具异常）"
     ),
 }
+
+_ENGINE_LABEL = {"google": "Google", "bing": "Bing"}
+
+
+def _empty_msg(name: SurfaceName, engine: str) -> str:
+    tmpl = _EMPTY_MSG_TEMPLATES.get(name)
+    if tmpl is None:
+        return "该查询无返回内容"
+    label = _ENGINE_LABEL.get(engine, engine)
+    return tmpl.format(engine_label=label)
 
 
 def _full_mode_available() -> bool:
@@ -182,7 +192,7 @@ def _render_surface(job: AnalysisJob, name: SurfaceName) -> None:
     st.markdown(f"### {badge} {label}{count_suffix}")
 
     if surface.status == SurfaceStatus.EMPTY:
-        st.caption(_EMPTY_MSG.get(name, "该查询无返回内容"))
+        st.caption(_empty_msg(name, job.engine))
         return
     if surface.status == SurfaceStatus.FAILED:
         msg = _FAILURE_MSG.get(surface.failure_category, "未知失败")
