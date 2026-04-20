@@ -355,3 +355,23 @@ def test_failed_is_never_cached(db_path):
     # No row was written.
     key = _cache_key("coffee", "en", "us")
     assert suggest_cache_get(key, 43200, 300) is None
+
+
+# --- static fallback stub (Unit 4) -------------------------------------------
+
+
+def test_static_fallback_stub_returns_degraded(db_path, monkeypatch):
+    """With SUGGEST_STATIC_FALLBACK=True and upstream FAILED, the stub is
+    invoked but produces no items, so the library still synthesizes
+    degraded-empty. Locks the flag-on code path to the intentional no-op
+    until a follow-up plan replaces the stub with a real implementation.
+    """
+    monkeypatch.setattr(config, "SUGGEST_STATIC_FALLBACK", True)
+
+    with _patched_get(return_value=_rate_limit_response()), _patched_sleep():
+        result = get_suggestions("coffee", "en", "US", retry=False)
+
+    assert result.status is SurfaceStatus.FAILED
+    assert result.provider_used == "none"
+    assert result.items == []
+    assert result.warnings == ["upstream_unavailable"]
