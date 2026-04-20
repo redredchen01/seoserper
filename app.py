@@ -193,6 +193,22 @@ def _render_history_sidebar() -> None:
             st.caption("暂无历史")
             return
 
+        # Filter box — only render when history has enough rows to make
+        # scanning painful. Below 5 jobs the filter UI is more clutter
+        # than value.
+        if len(jobs) >= 5:
+            filter_text = st.text_input(
+                "过滤 (query 子串匹配，大小写不敏感)",
+                key="_history_filter",
+                placeholder="输入关键字片段…",
+                label_visibility="collapsed",
+            ).strip().lower()
+            if filter_text:
+                jobs = [j for j in jobs if filter_text in (j.query or "").lower()]
+                if not jobs:
+                    st.caption(f"无匹配 · 过滤词 `{filter_text}`")
+                    return
+
         now = datetime.now(timezone.utc)
         groups = {"今天": [], "本周": [], "更早": []}
         for job in jobs:

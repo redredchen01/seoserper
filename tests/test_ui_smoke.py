@@ -116,6 +116,86 @@ def test_suggest_only_submit_button_still_enabled(monkeypatch, tmp_path):
 # --- common / unchanged ------------------------------------------------------
 
 
+def _seed_jobs(db_path: str, queries: list[str]) -> list[int]:
+    from seoserper.storage import (
+        complete_job, create_job, update_surface,
+    )
+    from seoserper.models import Suggestion, SurfaceName, SurfaceStatus
+    ids = []
+    for q in queries:
+        jid = create_job(q, "en", "us", db_path=db_path, render_mode="suggest-only")
+        update_surface(
+            jid, SurfaceName.SUGGEST, SurfaceStatus.OK,
+            items=[Suggestion(text=f"{q} shop", rank=1)], db_path=db_path,
+        )
+        complete_job(jid, db_path=db_path)
+        ids.append(jid)
+    return ids
+
+
+def _find_filter_input(at):
+    """Locate the history filter text_input by session-state key — the
+    label_visibility='collapsed' setting strips label from the rendered tree,
+    so key-based lookup is the stable path."""
+    return [i for i in at.sidebar.text_input if i.key == "_history_filter"]
+
+
+def test_history_filter_hidden_when_few_rows(monkeypatch, tmp_path):
+    """Filter box only appears once history grows — below 5 rows it's noise."""
+    _patch_key(monkeypatch, None)
+    _isolate_db(monkeypatch, tmp_path)
+    from seoserper.storage import init_db
+    db = str(tmp_path / "ui.db")
+    init_db(db)
+    _seed_jobs(db, ["coffee", "tea", "matcha"])
+    at = AppTest.from_file(APP_PATH).run(timeout=10)
+    assert _find_filter_input(at) == []
+
+
+def test_history_filter_shown_when_many_rows(monkeypatch, tmp_path):
+    """With 5+ rows the filter text_input renders in the sidebar."""
+    _patch_key(monkeypatch, None)
+    _isolate_db(monkeypatch, tmp_path)
+    from seoserper.storage import init_db
+    db = str(tmp_path / "ui.db")
+    init_db(db)
+    _seed_jobs(db, ["coffee", "tea", "matcha", "latte", "espresso", "mocha"])
+    at = AppTest.from_file(APP_PATH).run(timeout=10)
+    assert len(_find_filter_input(at)) == 1
+
+
+def test_history_filter_narrows_visible_rows(monkeypatch, tmp_path):
+    """Typing a substring collapses the sidebar to matching jobs only."""
+    _patch_key(monkeypatch, None)
+    _isolate_db(monkeypatch, tmp_path)
+    from seoserper.storage import init_db
+    db = str(tmp_path / "ui.db")
+    init_db(db)
+    ids = _seed_jobs(db, ["coffee", "tea", "matcha", "latte", "espresso", "mocha"])
+    at = AppTest.from_file(APP_PATH).run(timeout=10)
+    inputs = _find_filter_input(at)
+    assert len(inputs) == 1
+    inputs[0].set_value("cha").run(timeout=10)
+    keys = [b.key for b in at.sidebar.button if (b.key or "").startswith("hist_")]
+    # Only matcha (ids[2]) and mocha (ids[5]) contain "cha" as substring.
+    expected_visible = {f"hist_{ids[2]}", f"hist_{ids[5]}"}
+    assert set(keys) == expected_visible, keys
+
+
+def test_history_filter_no_match_shows_caption(monkeypatch, tmp_path):
+    _patch_key(monkeypatch, None)
+    _isolate_db(monkeypatch, tmp_path)
+    from seoserper.storage import init_db
+    db = str(tmp_path / "ui.db")
+    init_db(db)
+    _seed_jobs(db, ["coffee", "tea", "matcha", "latte", "espresso", "mocha"])
+    at = AppTest.from_file(APP_PATH).run(timeout=10)
+    inputs = _find_filter_input(at)
+    inputs[0].set_value("xxyyzz").run(timeout=10)
+    captions = [c.value for c in at.sidebar.caption]
+    assert any("无匹配" in c and "xxyyzz" in c for c in captions), captions
+
+
 def test_history_row_renders_both_load_and_rerun_buttons(monkeypatch, tmp_path):
     """When history exists, each row gets a main button + a 🔄 re-run button."""
     _patch_key(monkeypatch, None)
