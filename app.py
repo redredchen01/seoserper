@@ -166,7 +166,11 @@ def _boot_engine() -> AnalysisEngine:
 
 
 def _drain_progress() -> bool:
-    """Pull all queued events; return True if job still running."""
+    """Pull all queued events; return True if any relevant job still running.
+
+    Pair mode polls both pair jobs; historical view polls the pinned job;
+    single mode falls back to the primary current_job_id.
+    """
     ss = st.session_state
     if ss._engine is None:
         return False
@@ -177,11 +181,91 @@ def _drain_progress() -> bool:
             still_running = False
         elif ev.kind == "start":
             still_running = True
-    if ss._current_job_id is not None:
-        job = get_job(ss._current_job_id, db_path=ss._db_path)
+
+    ids_to_poll: list[int] = []
+    if ss._historical_job_id is not None:
+        ids_to_poll.append(ss._historical_job_id)
+    elif ss._pair_job_ids:
+        ids_to_poll.extend(ss._pair_job_ids)
+    elif ss._current_job_id is not None:
+        ids_to_poll.append(ss._current_job_id)
+
+    for jid in ids_to_poll:
+        job = get_job(jid, db_path=ss._db_path)
         if job is not None and job.status == JobStatus.RUNNING:
             still_running = True
     return still_running
+
+
+def _render_pair(g_job: AnalysisJob, b_job: AnalysisJob) -> None:
+    """Render a Google + Bing side-by-side comparison view."""
+    st.caption(
+        f"🔀 对比模式 · query: {g_job.query} · "
+        f"{g_job.language}/{g_job.country} · started {g_job.started_at} UTC"
+    )
+    col_g, col_b = st.columns(2)
+    with col_g:
+        st.markdown("### 🌐 Google")
+        st.caption(f"source: {g_job.source_suggest} + {g_job.source_serp}")
+        present = [
+            n for n in (SurfaceName.SUGGEST, SurfaceName.PAA, SurfaceName.RELATED)
+            if n in g_job.surfaces
+        ]
+        for i, name in enumerate(present):
+            if i > 0:
+                st.divider()
+            _render_surface(g_job, name)
+        if g_job.status != JobStatus.RUNNING:
+            cols = st.columns(2)
+            with cols[0]:
+                st.download_button(
+                    "📄 Google MD",
+                    data=render_analysis_to_md(g_job),
+                    file_name=build_filename(g_job),
+                    mime="text/markdown",
+                    use_container_width=True,
+                    key=f"md_pair_g_{g_job.id}",
+                )
+            with cols[1]:
+                st.download_button(
+                    "📊 Google CSV",
+                    data=render_analysis_to_csv(g_job).encode("utf-8"),
+                    file_name=build_csv_filename(g_job),
+                    mime="text/csv",
+                    use_container_width=True,
+                    key=f"csv_pair_g_{g_job.id}",
+                )
+    with col_b:
+        st.markdown("### 🅱️ Bing")
+        st.caption(f"source: {b_job.source_serp} (no autocomplete)")
+        present = [
+            n for n in (SurfaceName.PAA, SurfaceName.RELATED)
+            if n in b_job.surfaces
+        ]
+        for i, name in enumerate(present):
+            if i > 0:
+                st.divider()
+            _render_surface(b_job, name)
+        if b_job.status != JobStatus.RUNNING:
+            cols = st.columns(2)
+            with cols[0]:
+                st.download_button(
+                    "📄 Bing MD",
+                    data=render_analysis_to_md(b_job),
+                    file_name=build_filename(b_job),
+                    mime="text/markdown",
+                    use_container_width=True,
+                    key=f"md_pair_b_{b_job.id}",
+                )
+            with cols[1]:
+                st.download_button(
+                    "📊 Bing CSV",
+                    data=render_analysis_to_csv(b_job).encode("utf-8"),
+                    file_name=build_csv_filename(b_job),
+                    mime="text/csv",
+                    use_container_width=True,
+                    key=f"csv_pair_b_{b_job.id}",
+                )
 
 
 def _render_surface(job: AnalysisJob, name: SurfaceName) -> None:
@@ -491,6 +575,23 @@ def main() -> None:
             ss._pair_job_ids = None  # single-submit clears any prior pair
 
     _render_history_sidebar()
+
+    # Dispatch: pair mode renders 2 columns; historical override falls back
+    # to single view; single mode is the legacy single-job path.
+    if ss._historical_job_id is None and ss._pair_job_ids:
+        g_id, b_id = ss._pair_job_ids
+        g_job = get_job(g_id, db_path=ss._db_path)
+        b_job = get_job(b_id, db_path=ss._db_path)
+        if g_job is None or b_job is None:
+            st.warning("对比模式历史记录已丢失")
+            return
+        _render_pair(g_job, b_job)
+        if g_job.status == JobStatus.RUNNING or b_job.status == JobStatus.RUNNING:
+            still = _drain_progress()
+            if still:
+                time.sleep(0.25)
+                st.rerun()
+        return
 
     viewing_id = ss._historical_job_id or ss._current_job_id
     if viewing_id is None:
