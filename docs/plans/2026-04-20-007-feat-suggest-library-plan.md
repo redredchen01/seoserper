@@ -1,7 +1,7 @@
 ---
 title: "feat: Suggest shared library (seoserper.suggest.get_suggestions)"
 type: feat
-status: active
+status: completed
 date: 2026-04-20
 deepened: 2026-04-20
 origin: docs/brainstorms/2026-04-20-suggest-library-requirements.md
