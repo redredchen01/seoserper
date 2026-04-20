@@ -1,16 +1,13 @@
 """SEOSERPER — Streamlit UI entry.
 
-MVP scope (plan §Unit 7):
-- Keyword + lang + country + Submit row.
-- Preflight check (Playwright / Chromium), DB init + orphan sweep at boot.
-- 3 surfaces stacked vertically (Suggestions / PAA / Related), badges per
-  surface, progressive reveal via queue.drain + st.rerun ticks.
-- Export MD button (completed job), Retry failed surfaces button.
-- Sidebar history (recent 50, grouped Today / This week / Older).
-- Historical view banner when loading a past snapshot.
+Behavior branches on ``config.ENABLE_SERP_RENDER`` (see seoserper/config.py
+module docstring for the full recovery / sunset / kill-criterion checklist):
 
-Out-of-scope for this commit: custom clipboard component (Streamlit's
-st.code block provides built-in copy); per-surface animation; settings page.
+- Flag off (default): Suggest-only mode. One Suggestions section. Muted
+  top-of-page notice. No Chromium subprocess. Preflight failure degrades
+  to a soft info notice (Suggest still runs).
+- Flag on: Full 3-section layout. Playwright RenderThread starts on first
+  Submit. Preflight failure hard-blocks (same as before pivot).
 """
 
 from __future__ import annotations
@@ -80,27 +77,42 @@ def _ensure_session_state() -> None:
         ok, msg = preflight()
         ss._preflight_ok = ok
         ss._preflight_msg = msg
+        # Suggest-only mode degrades preflight failure to a soft notice instead
+        # of hard-blocking — Suggest has no Chromium dependency.
+        ss._preflight_soft_fail = (not ok) and (not config.ENABLE_SERP_RENDER)
 
 
 def _boot_engine() -> AnalysisEngine | None:
-    """Lazily build the engine on first Submit. Returns None if preflight failed."""
+    """Lazily build the engine on first Submit.
+
+    Under flag=False (Suggest-only): engine is built with render_thread=None
+    and parse_fn=None; no Chromium subprocess is created. Under flag=True:
+    the original full-mode code path (start RenderThread, wire parser).
+
+    Returns None only when the live flag requires Playwright but preflight
+    failed. Suggest-only never returns None.
+    """
     ss = st.session_state
-    if not ss._preflight_ok:
-        return None
     if ss._engine is not None:
         return ss._engine
 
-    # Import parser lazily — it may not exist until Unit 4 ships. If the
-    # import fails we fall back to a stub that flags both surfaces as
-    # selector-drift, keeping Suggest usable.
-    parse_fn = _load_parser_or_stub()
-
-    rt = RenderThread()
-    rt.start()
-    ss._render_thread = rt
-    ss._engine = AnalysisEngine(
-        render_thread=rt, parse_fn=parse_fn, db_path=ss._db_path
-    )
+    if config.ENABLE_SERP_RENDER:
+        # Full mode: require preflight; wire real RenderThread + parser.
+        if not ss._preflight_ok:
+            return None
+        rt = RenderThread()
+        rt.start()
+        ss._render_thread = rt
+        parse_fn = _load_parser_or_stub()
+        ss._engine = AnalysisEngine(
+            render_thread=rt, parse_fn=parse_fn, db_path=ss._db_path
+        )
+    else:
+        # Suggest-only: no Chromium, no parser.
+        ss._render_thread = None
+        ss._engine = AnalysisEngine(
+            render_thread=None, parse_fn=None, db_path=ss._db_path
+        )
     return ss._engine
 
 
@@ -112,7 +124,6 @@ def _load_parser_or_stub():
         from seoserper.models import ParseResult
 
         def stub(html: str, locale: str):
-            # Unit 4 not yet shipped — both SERP surfaces flag as selector drift.
             return {
                 SurfaceName.PAA: ParseResult(
                     status=SurfaceStatus.FAILED,
@@ -139,7 +150,6 @@ def _drain_progress() -> bool:
             still_running = False
         elif ev.kind == "start":
             still_running = True
-    # After drain, check storage to determine final state for the current job.
     if ss._current_job_id is not None:
         job = get_job(ss._current_job_id, db_path=ss._db_path)
         if job is not None and job.status == JobStatus.RUNNING:
@@ -215,26 +225,35 @@ def _render_history_sidebar() -> None:
                 label_line = (
                     (job.query[:40] + "…") if len(job.query) > 40 else job.query
                 )
+                # Iterate only the surfaces actually present on the job
+                # (suggest-only jobs have just one; full jobs have three).
                 badges = "".join(
-                    _BADGES.get(job.surfaces.get(n, None).status, "·") if job.surfaces.get(n) else "·"
-                    for n in (SurfaceName.SUGGEST, SurfaceName.PAA, SurfaceName.RELATED)
+                    _BADGES.get(s.status, "·") for s in job.surfaces.values()
                 )
+                mode_tag = "·S" if job.render_mode == "suggest-only" else ""
                 key = f"hist_{job.id}"
-                if st.button(f"{label_line}\n{job.language}-{job.country} {badges}",
-                             key=key, use_container_width=True):
+                if st.button(
+                    f"{label_line}\n{job.language}-{job.country} {badges}{mode_tag}",
+                    key=key, use_container_width=True,
+                ):
                     ss._historical_job_id = job.id
 
 
 def _render_current(job: AnalysisJob) -> None:
-    st.caption(
-        f"Suggest: {job.source_suggest} · PAA+Related: {job.source_serp} "
-        f"· started {job.started_at} UTC"
-    )
-    _render_surface(job, SurfaceName.SUGGEST)
-    st.divider()
-    _render_surface(job, SurfaceName.PAA)
-    st.divider()
-    _render_surface(job, SurfaceName.RELATED)
+    metadata_bits = [f"Suggest: {job.source_suggest}"]
+    if job.render_mode == "full":
+        metadata_bits.append(f"PAA+Related: {job.source_serp}")
+    metadata_bits.append(f"started {job.started_at} UTC")
+    st.caption(" · ".join(metadata_bits))
+
+    # Iterate only the surfaces the job actually has — suggest-only jobs
+    # render one section; full jobs render three with dividers between.
+    present_names = [n for n in (SurfaceName.SUGGEST, SurfaceName.PAA, SurfaceName.RELATED)
+                     if n in job.surfaces]
+    for i, name in enumerate(present_names):
+        if i > 0:
+            st.divider()
+        _render_surface(job, name)
 
     if job.status != JobStatus.RUNNING:
         any_failed = any(
@@ -258,6 +277,23 @@ def _render_current(job: AnalysisJob) -> None:
                         st.rerun()
 
 
+def _render_mode_notice() -> None:
+    """Top-of-page notice: muted grey, non-dismissible, no config identifier.
+
+    Stacked-notice rule (design-lens F2): under Suggest-only + preflight fail,
+    render a single merged caption instead of two separate top-of-page lines.
+    """
+    ss = st.session_state
+    if config.ENABLE_SERP_RENDER:
+        return
+    if getattr(ss, "_preflight_soft_fail", False):
+        st.caption(
+            "Suggest-only 模式 · 当前网络限速中 · Playwright 未安装但当前模式无需"
+        )
+    else:
+        st.caption("Suggest-only 模式 · 当前网络限速中")
+
+
 def main() -> None:
     st.set_page_config(page_title="SEOSERPER", layout="wide")
     st.title("SEOSERPER · Google SERP Analyzer")
@@ -265,10 +301,15 @@ def main() -> None:
     _ensure_session_state()
     ss = st.session_state
 
-    if not ss._preflight_ok:
+    # Under flag=True, preflight failure is a hard block (full-mode UI
+    # depends on Chromium). Under flag=False, preflight is already degraded
+    # to a soft notice at session-state init and we fall through.
+    if config.ENABLE_SERP_RENDER and not ss._preflight_ok:
         st.error(ss._preflight_msg)
         st.info("安装后请刷新页面")
         return
+
+    _render_mode_notice()
 
     # Input row
     cols = st.columns([4, 1, 1, 1])
@@ -291,7 +332,6 @@ def main() -> None:
 
     _render_history_sidebar()
 
-    # Render either historical snapshot or live current job
     viewing_id = ss._historical_job_id or ss._current_job_id
     if viewing_id is None:
         st.info("输入关键字 + 点 Submit 开始分析")
@@ -310,7 +350,6 @@ def main() -> None:
 
     _render_current(job)
 
-    # Tick while running
     if job.status == JobStatus.RUNNING:
         still = _drain_progress()
         if still:
