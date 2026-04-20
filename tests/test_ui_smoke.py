@@ -196,6 +196,80 @@ def test_history_filter_no_match_shows_caption(monkeypatch, tmp_path):
     assert any("无匹配" in c and "xxyyzz" in c for c in captions), captions
 
 
+def test_engine_radio_renders_with_google_and_bing(monkeypatch, tmp_path):
+    _patch_key(monkeypatch, "fake-key")
+    _isolate_db(monkeypatch, tmp_path)
+    _stub_quota(monkeypatch, "SerpAPI 剩余 87/100")
+    at = AppTest.from_file(APP_PATH).run(timeout=10)
+    radios = [r for r in at.radio if r.label == "搜索引擎"]
+    assert len(radios) == 1
+    options = list(radios[0].options)
+    assert options == ["Google", "Bing"]
+    # Default should be Google (index 0)
+    assert radios[0].value == "Google"
+
+
+def test_engine_radio_present_in_suggest_only_mode_too(monkeypatch, tmp_path):
+    """Radio is unconditional — user may set SERPAPI_KEY later and Bing needs it."""
+    _patch_key(monkeypatch, None)
+    _isolate_db(monkeypatch, tmp_path)
+    at = AppTest.from_file(APP_PATH).run(timeout=10)
+    radios = [r for r in at.radio if r.label == "搜索引擎"]
+    assert len(radios) == 1
+
+
+def test_bing_job_renders_no_suggest_advisory_caption(monkeypatch, tmp_path):
+    """A Bing job's view carries an explanatory caption about no Suggest."""
+    _patch_key(monkeypatch, "fake-key")
+    _isolate_db(monkeypatch, tmp_path)
+    _stub_quota(monkeypatch, "SerpAPI 剩余 87/100")
+    from seoserper.storage import (
+        complete_job, create_job, init_db, update_surface,
+    )
+    from seoserper.models import SurfaceName, SurfaceStatus, PAAQuestion
+    db = str(tmp_path / "ui.db")
+    init_db(db)
+    jid = create_job("coffee", "en", "us", db_path=db, engine="bing")
+    update_surface(
+        jid, SurfaceName.PAA, SurfaceStatus.OK,
+        items=[PAAQuestion(question="Is coffee good?", rank=1)], db_path=db,
+    )
+    update_surface(jid, SurfaceName.RELATED, SurfaceStatus.OK, items=[], db_path=db)
+    complete_job(jid, db_path=db)
+
+    # Load the Bing job via session state by clicking its history row.
+    at = AppTest.from_file(APP_PATH).run(timeout=10)
+    [b for b in at.sidebar.button if b.key == f"hist_{jid}"][0].click().run(timeout=10)
+
+    captions = [c.value for c in at.caption]
+    # Metadata caption should name the engine.
+    assert any("engine: bing" in c for c in captions), captions
+    # No-Suggest advisory caption should be present.
+    assert any("Bing 未提供公开 autocomplete" in c for c in captions), captions
+
+
+def test_google_job_does_not_render_bing_advisory(monkeypatch, tmp_path):
+    _patch_key(monkeypatch, None)
+    _isolate_db(monkeypatch, tmp_path)
+    from seoserper.storage import (
+        complete_job, create_job, init_db, update_surface,
+    )
+    from seoserper.models import SurfaceName, SurfaceStatus, Suggestion
+    db = str(tmp_path / "ui.db")
+    init_db(db)
+    jid = create_job("coffee", "en", "us", db_path=db, render_mode="suggest-only")
+    update_surface(
+        jid, SurfaceName.SUGGEST, SurfaceStatus.OK,
+        items=[Suggestion(text="coffee shop", rank=1)], db_path=db,
+    )
+    complete_job(jid, db_path=db)
+
+    at = AppTest.from_file(APP_PATH).run(timeout=10)
+    [b for b in at.sidebar.button if b.key == f"hist_{jid}"][0].click().run(timeout=10)
+    captions = [c.value for c in at.caption]
+    assert not any("Bing 未提供公开" in c for c in captions), captions
+
+
 def test_history_row_renders_delete_button(monkeypatch, tmp_path):
     """Each history row gets a 🗑️ delete button next to the main + 🔄."""
     _patch_key(monkeypatch, None)

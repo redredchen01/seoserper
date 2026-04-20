@@ -316,11 +316,21 @@ def _render_history_sidebar() -> None:
 
 
 def _render_current(job: AnalysisJob) -> None:
-    metadata_bits = [f"Suggest: {job.source_suggest}"]
-    if job.render_mode == "full":
+    metadata_bits = [f"engine: {job.engine}"]
+    if SurfaceName.SUGGEST in job.surfaces:
+        metadata_bits.append(f"Suggest: {job.source_suggest}")
+    if job.render_mode == "full" and any(
+        n in job.surfaces for n in (SurfaceName.PAA, SurfaceName.RELATED)
+    ):
         metadata_bits.append(f"PAA+Related: {job.source_serp}")
     metadata_bits.append(f"started {job.started_at} UTC")
     st.caption(" · ".join(metadata_bits))
+
+    if job.engine == "bing":
+        st.caption(
+            "Bing 未提供公开 autocomplete 端点 — 如需 Bing 建议数据可切至 Google "
+            "或使用付费 Azure Autosuggest（暂不在本工具范围内）。"
+        )
 
     # Iterate only the surfaces the job actually has — suggest-only jobs
     # render one section; full jobs render three with dividers between.
@@ -391,6 +401,18 @@ def main() -> None:
 
     _render_mode_notice()
 
+    # Engine selector — horizontal radio, Google default. Bing only shows the
+    # extra caption about no-Suggest after a job lands; doesn't gate the input.
+    engine_choice = st.radio(
+        "搜索引擎",
+        options=["Google", "Bing"],
+        horizontal=True,
+        key="_engine_input",
+        help="Google: 3 版位 (Suggest + PAA + Related)。Bing: 2 版位 (PAA + Related)，无 autocomplete。"
+             " 两者共享同一个 SerpAPI 配额池。",
+    )
+    engine_value = "bing" if engine_choice == "Bing" else "google"
+
     # Input row
     cols = st.columns([4, 2, 1])
     with cols[0]:
@@ -425,11 +447,13 @@ def main() -> None:
             # Pre-invalidate the exact key so the downstream cached wrapper
             # misses → live SerpAPI call → stores fresh row.
             cache_invalidate(
-                _cache_key(query.strip(), lang, country),
+                _cache_key(query.strip(), lang, country, engine_value),
                 db_path=ss._db_path,
             )
         engine = _boot_engine()
-        job_id = engine.submit(query.strip(), lang, country)
+        job_id = engine.submit(
+            query.strip(), lang, country, engine=engine_value
+        )
         ss._current_job_id = job_id
         ss._historical_job_id = None
 
