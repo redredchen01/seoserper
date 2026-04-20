@@ -95,7 +95,7 @@ def _drain(engine: AnalysisEngine, expect_complete: bool = True, timeout: float 
 
 def test_submit_creates_job_and_returns_id(db_path):
     engine = AnalysisEngine(
-        serp_fn=lambda q, l, c: _ok_parsed(),
+        serp_fn=lambda q, l, c, *, engine="google": _ok_parsed(),
         db_path=db_path,
         fetch_fn=lambda q, l, c: _ok_suggest(q),
     )
@@ -120,7 +120,7 @@ def test_submit_creates_job_and_returns_id(db_path):
 def test_partial_success_counts_as_completed(db_path):
     """ok_count >= 1 rule: Suggest ok + SerpAPI rate-limited → still completed."""
     engine = AnalysisEngine(
-        serp_fn=lambda q, l, c: _failed_parsed(FailureCategory.BLOCKED_RATE_LIMIT),
+        serp_fn=lambda q, l, c, *, engine="google": _failed_parsed(FailureCategory.BLOCKED_RATE_LIMIT),
         db_path=db_path,
         fetch_fn=lambda q, l, c: _ok_suggest(q),
     )
@@ -139,7 +139,7 @@ def test_partial_success_counts_as_completed(db_path):
 
 def test_all_failed_job_marks_failed(db_path):
     engine = AnalysisEngine(
-        serp_fn=lambda q, l, c: _failed_parsed(FailureCategory.NETWORK_ERROR),
+        serp_fn=lambda q, l, c, *, engine="google": _failed_parsed(FailureCategory.NETWORK_ERROR),
         db_path=db_path,
         fetch_fn=lambda q, l, c: _failed_suggest(),
     )
@@ -163,7 +163,7 @@ def test_all_failed_job_marks_failed(db_path):
 )
 def test_serp_failure_categories_round_trip(db_path, category):
     engine = AnalysisEngine(
-        serp_fn=lambda q, l, c: _failed_parsed(category),
+        serp_fn=lambda q, l, c, *, engine="google": _failed_parsed(category),
         db_path=db_path,
         fetch_fn=lambda q, l, c: _ok_suggest(q),
     )
@@ -177,7 +177,7 @@ def test_serp_failure_categories_round_trip(db_path, category):
 def test_serp_fn_exception_flags_network_error(db_path):
     """Defensive path: an unexpected bug inside the fetcher must not leak."""
 
-    def bomb(q, l, c):
+    def bomb(q, l, c, *, engine="google"):
         raise RuntimeError("unexpected fetcher bug")
 
     engine = AnalysisEngine(
@@ -196,7 +196,7 @@ def test_serp_fn_exception_flags_network_error(db_path):
 def test_serp_fn_missing_surface_key_flags_selector_not_found(db_path):
     """If serp_fn dict is missing a surface key, engine treats it as SELECTOR_NOT_FOUND."""
 
-    def partial(q, l, c):
+    def partial(q, l, c, *, engine="google"):
         return {SurfaceName.PAA: ParseResult(status=SurfaceStatus.OK, items=[])}
 
     engine = AnalysisEngine(
@@ -224,9 +224,9 @@ def test_retry_only_reruns_failed_surfaces(db_path):
         suggest_calls.append((q, l, c))
         return _ok_suggest(q)
 
-    serp_state = {"fn": lambda q, l, c: _failed_parsed(FailureCategory.BLOCKED_RATE_LIMIT)}
+    serp_state = {"fn": lambda q, l, c, *, engine="google": _failed_parsed(FailureCategory.BLOCKED_RATE_LIMIT)}
 
-    def serp(q, l, c):
+    def serp(q, l, c, *, engine="google"):
         return serp_state["fn"](q, l, c)
 
     engine = AnalysisEngine(
@@ -239,7 +239,7 @@ def test_retry_only_reruns_failed_surfaces(db_path):
     assert len(suggest_calls) == 1
 
     # Swap serp to success and retry.
-    serp_state["fn"] = lambda q, l, c: _ok_parsed()
+    serp_state["fn"] = lambda q, l, c, *, engine="google": _ok_parsed()
     engine.retry_failed_surfaces(job_id)
     _drain(engine)
 
@@ -252,7 +252,7 @@ def test_retry_only_reruns_failed_surfaces(db_path):
 
 def test_retry_noop_when_all_ok(db_path):
     engine = AnalysisEngine(
-        serp_fn=lambda q, l, c: _ok_parsed(),
+        serp_fn=lambda q, l, c, *, engine="google": _ok_parsed(),
         db_path=db_path,
         fetch_fn=lambda q, l, c: _ok_suggest(q),
     )
@@ -276,9 +276,9 @@ def test_retry_preserves_ok_on_retry_serp(db_path):
             return _ok_suggest(q)
         return _failed_suggest()
 
-    serp_state = {"fn": lambda q, l, c: _failed_parsed(FailureCategory.BLOCKED_RATE_LIMIT)}
+    serp_state = {"fn": lambda q, l, c, *, engine="google": _failed_parsed(FailureCategory.BLOCKED_RATE_LIMIT)}
 
-    def serp(q, l, c):
+    def serp(q, l, c, *, engine="google"):
         return serp_state["fn"](q, l, c)
 
     engine = AnalysisEngine(
@@ -290,7 +290,7 @@ def test_retry_preserves_ok_on_retry_serp(db_path):
     _drain(engine)
     assert calls["fetch"] == 1
 
-    serp_state["fn"] = lambda q, l, c: _ok_parsed()
+    serp_state["fn"] = lambda q, l, c, *, engine="google": _ok_parsed()
     engine.retry_failed_surfaces(job_id)
     _drain(engine)
     assert calls["fetch"] == 1  # fetch_fn NOT re-called
@@ -303,7 +303,7 @@ def test_progress_events_cover_all_surfaces(db_path):
     """Parallel dispatch: start + complete bookend; suggest/paa/related
     emit in any order between them."""
     engine = AnalysisEngine(
-        serp_fn=lambda q, l, c: _ok_parsed(),
+        serp_fn=lambda q, l, c, *, engine="google": _ok_parsed(),
         db_path=db_path,
         fetch_fn=lambda q, l, c: _ok_suggest(q),
     )
@@ -349,7 +349,7 @@ def test_parallel_dispatch_wall_clock_is_not_sum(db_path):
 
 def test_two_concurrent_submits_dont_interfere(db_path):
     engine = AnalysisEngine(
-        serp_fn=lambda q, l, c: _ok_parsed(),
+        serp_fn=lambda q, l, c, *, engine="google": _ok_parsed(),
         db_path=db_path,
         fetch_fn=lambda q, l, c: _ok_suggest(q),
     )
@@ -374,11 +374,11 @@ def test_two_concurrent_submits_dont_interfere(db_path):
 
 
 def test_unhandled_exception_leaves_job_in_terminal_state(db_path):
-    def bomb(q, l, c):
+    def bomb(q, l, c, *, engine="google"):
         raise RuntimeError("unexpected boom")
 
     engine = AnalysisEngine(
-        serp_fn=lambda q, l, c: _ok_parsed(),
+        serp_fn=lambda q, l, c, *, engine="google": _ok_parsed(),
         db_path=db_path,
         fetch_fn=bomb,
     )
@@ -484,7 +484,7 @@ class TestAdv1HistoricalRetryGuard:
         # PAA/Related failed (mimics a pre-key-rotation failed attempt).
         monkeypatch.setattr(config, "SERPAPI_KEY", "fake-key")
         engine_full = AnalysisEngine(
-            serp_fn=lambda q, l, c: _failed_parsed(FailureCategory.BLOCKED_RATE_LIMIT),
+            serp_fn=lambda q, l, c, *, engine="google": _failed_parsed(FailureCategory.BLOCKED_RATE_LIMIT),
             db_path=db_path,
             fetch_fn=lambda q, l, c: _ok_suggest(q),
         )
@@ -520,7 +520,7 @@ class TestAdv1HistoricalRetryGuard:
 
         monkeypatch.setattr(config, "SERPAPI_KEY", "fake-key")
         engine_full = AnalysisEngine(
-            serp_fn=lambda q, l, c: _failed_parsed(FailureCategory.BLOCKED_RATE_LIMIT),
+            serp_fn=lambda q, l, c, *, engine="google": _failed_parsed(FailureCategory.BLOCKED_RATE_LIMIT),
             db_path=db_path,
             fetch_fn=lambda q, l, c: _failed_suggest(FailureCategory.NETWORK_ERROR),
         )
@@ -557,3 +557,106 @@ class TestEngineOptionalSerpFn:
         assert engine._serp_fn is None
         engine.submit("coffee", "en", "us")
         _drain(engine)
+
+
+# --- Bing engine (plan 005 Unit 4) -------------------------------------------
+
+
+class TestBingEngine:
+    """engine='bing' creates 2-surface jobs (PAA + RELATED, no SUGGEST)."""
+
+    def test_submit_bing_creates_two_surface_job(self, db_path):
+        calls = []
+        def serp(q, l, c, *, engine):
+            calls.append(engine)
+            return _ok_parsed()
+
+        engine = AnalysisEngine(
+            serp_fn=serp,
+            db_path=db_path,
+            fetch_fn=lambda q, l, c: _ok_suggest(q),
+        )
+        jid = engine.submit("coffee", "en", "us", engine="bing")
+        _drain(engine)
+
+        job = get_job(jid, db_path=db_path)
+        assert job.engine == "bing"
+        assert set(job.surfaces.keys()) == {SurfaceName.PAA, SurfaceName.RELATED}
+        assert job.surfaces[SurfaceName.PAA].status == SurfaceStatus.OK
+        assert job.surfaces[SurfaceName.RELATED].status == SurfaceStatus.OK
+        # serp_fn received engine=bing
+        assert calls == ["bing"]
+
+    def test_submit_bing_does_not_invoke_suggest_fetcher(self, db_path):
+        suggest_calls = []
+        def fetch(q, l, c):
+            suggest_calls.append(q)
+            return _ok_suggest(q)
+
+        engine = AnalysisEngine(
+            serp_fn=lambda q, l, c, *, engine="google": _ok_parsed(),
+            db_path=db_path,
+            fetch_fn=fetch,
+        )
+        engine.submit("coffee", "en", "us", engine="bing")
+        _drain(engine)
+        assert suggest_calls == []  # Bing skips Suggest entirely
+
+    def test_bing_retry_preserves_engine(self, db_path):
+        """Bing job with a failed Related → retry should re-call serp_fn
+        with engine='bing' (stored engine, not live arg)."""
+        # First call fails, second call (retry) succeeds.
+        state = {"calls": [], "fail_count": 1}
+        def flaky_serp(q, l, c, *, engine):
+            state["calls"].append(engine)
+            if state["fail_count"] > 0:
+                state["fail_count"] -= 1
+                return _failed_parsed(FailureCategory.BLOCKED_RATE_LIMIT)
+            return _ok_parsed()
+
+        engine = AnalysisEngine(
+            serp_fn=flaky_serp,
+            db_path=db_path,
+            fetch_fn=lambda q, l, c: _ok_suggest(q),
+        )
+        jid = engine.submit("coffee", "en", "us", engine="bing")
+        _drain(engine)
+        assert state["calls"] == ["bing"]
+        assert get_job(jid, db_path=db_path).surfaces[SurfaceName.PAA].status == SurfaceStatus.FAILED
+
+        # Retry — should pass engine='bing' again (from stored row, not args)
+        engine.retry_failed_surfaces(jid)
+        _drain(engine)
+        assert state["calls"] == ["bing", "bing"]
+        assert get_job(jid, db_path=db_path).surfaces[SurfaceName.PAA].status == SurfaceStatus.OK
+
+    def test_google_and_bing_concurrent_dont_cross_contaminate(self, db_path):
+        """Submit a Google job + a Bing job back to back; each job's engine
+        is correctly passed to its own serp_fn invocation."""
+        calls_by_query = {}
+        def serp(q, l, c, *, engine):
+            calls_by_query.setdefault(q, []).append(engine)
+            return _ok_parsed()
+
+        engine = AnalysisEngine(
+            serp_fn=serp,
+            db_path=db_path,
+            fetch_fn=lambda q, l, c: _ok_suggest(q),
+        )
+        id_g = engine.submit("coffee", "en", "us")  # google default
+        id_b = engine.submit("tea", "en", "us", engine="bing")
+
+        import time as _time
+        deadline = _time.monotonic() + 3.0
+        completes = set()
+        while _time.monotonic() < deadline and len(completes) < 2:
+            try:
+                ev = engine.progress_queue.get(timeout=0.05)
+            except Exception:
+                continue
+            if ev.kind == "complete":
+                completes.add(ev.job_id)
+        assert {id_g, id_b}.issubset(completes)
+
+        assert calls_by_query["coffee"] == ["google"]
+        assert calls_by_query["tea"] == ["bing"]

@@ -86,25 +86,38 @@ class AnalysisEngine:
 
     # --- public API ---
 
-    def submit(self, query: str, lang: str, country: str) -> int:
+    def submit(self, query: str, lang: str, country: str, *, engine: str = "google") -> int:
         """INSERT a new job and spawn a background worker. Returns job_id.
 
         Reads ``config.SERPAPI_KEY`` once at the top to decide whether to run
-        in full mode (3 surfaces, Suggest + SerpAPI) or suggest-only mode
-        (1 surface, Suggest only). The resolved render_mode is stamped on
-        the job row so historical jobs stay self-consistent if the key is
-        later unset / rotated.
+        full SERP fetching. Engine (``google`` | ``bing``) is orthogonal:
+        - engine=google + key set     → Suggest + PAA + Related (3 surfaces)
+        - engine=google + key unset   → Suggest-only (1 surface)
+        - engine=bing   + key set     → PAA + Related via Bing (2 surfaces)
+        - engine=bing   + key unset   → invalid (no free Bing autocomplete);
+          treated as suggest-only + render_mode stays 'full' + serp skipped.
+          The resulting 2-row Bing job completes with both surfaces FAILED
+          (NETWORK_ERROR) when the worker runs — consistent with other
+          SERPAPI_KEY-missing failure modes.
         """
-        render_mode = "full" if config.SERPAPI_KEY else "suggest-only"
+        if engine == "bing":
+            run_suggest = False
+            run_serp = config.SERPAPI_KEY is not None
+            render_mode = "full"  # semantic: Bing jobs never collapse to suggest-only
+        else:
+            render_mode = "full" if config.SERPAPI_KEY else "suggest-only"
+            run_suggest = True
+            run_serp = render_mode == "full"
+
         job_id = create_job(
             query, lang, country,
             db_path=self._db_path,
             render_mode=render_mode,
+            engine=engine,
         )
-        run_serp = render_mode == "full"
         self._spawn_worker(
             job_id, query, lang, country,
-            run_suggest=True, run_serp=run_serp,
+            run_suggest=run_suggest, run_serp=run_serp, engine=engine,
         )
         return job_id
 
@@ -149,23 +162,23 @@ class AnalysisEngine:
             )
         self._spawn_worker(
             job_id, job.query, job.language, job.country,
-            run_suggest=run_suggest, run_serp=run_serp,
+            run_suggest=run_suggest, run_serp=run_serp, engine=job.engine,
         )
 
     # --- internal ---
 
     def _spawn_worker(self, job_id: int, query: str, lang: str, country: str,
-                      *, run_suggest: bool, run_serp: bool) -> None:
+                      *, run_suggest: bool, run_serp: bool, engine: str = "google") -> None:
         thread = threading.Thread(
             target=self._run_analysis,
-            args=(job_id, query, lang, country, run_suggest, run_serp),
+            args=(job_id, query, lang, country, run_suggest, run_serp, engine),
             name=f"seoserper-engine-{job_id}",
             daemon=True,
         )
         thread.start()
 
     def _run_analysis(self, job_id: int, query: str, lang: str, country: str,
-                      run_suggest: bool, run_serp: bool) -> None:
+                      run_suggest: bool, run_serp: bool, engine: str = "google") -> None:
         self._emit(job_id, "start")
         try:
             if run_suggest and run_serp:
@@ -181,17 +194,14 @@ class AnalysisEngine:
                         self._do_suggest, job_id, query, lang, country
                     )
                     f_serp = executor.submit(
-                        self._do_serp, job_id, query, lang, country
+                        self._do_serp, job_id, query, lang, country, engine
                     )
-                    # Surface the first exception (if any); the other future
-                    # has already completed or will complete inside the
-                    # context-manager shutdown.
                     for fut in concurrent.futures.as_completed((f_suggest, f_serp)):
                         fut.result()
             elif run_suggest:
                 self._do_suggest(job_id, query, lang, country)
             elif run_serp:
-                self._do_serp(job_id, query, lang, country)
+                self._do_serp(job_id, query, lang, country, engine)
             final = complete_job(job_id, db_path=self._db_path)
             self._emit(job_id, "complete", status=final.value)
         except BaseException as exc:
@@ -213,7 +223,7 @@ class AnalysisEngine:
         )
         self._emit(job_id, "suggest", status=result.status.value)
 
-    def _do_serp(self, job_id: int, query: str, lang: str, country: str) -> None:
+    def _do_serp(self, job_id: int, query: str, lang: str, country: str, engine: str = "google") -> None:
         # Invariant: run_serp=True implies the caller wired a real serp_fn.
         # Assert here so misuse (e.g. a bug that routes a suggest-only job
         # through the SerpAPI path) fails loudly rather than AttributeError
@@ -223,7 +233,7 @@ class AnalysisEngine:
         )
 
         try:
-            parsed = self._serp_fn(query, lang, country)
+            parsed = self._serp_fn(query, lang, country, engine=engine)
         except Exception:
             # Defensive only — Unit 2's fetcher converts all known error
             # classes to ParseResults already. This catches truly unexpected
