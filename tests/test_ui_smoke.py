@@ -19,13 +19,11 @@ def _patch_key(monkeypatch, key: str | None):
     monkeypatch.setattr(config, "SERPAPI_KEY", key)
 
 
-def _stub_quota(monkeypatch, caption: str | None):
+def _stub_quota(monkeypatch, caption: str | None, is_low: bool = False):
     """Short-circuit the SerpAPI account endpoint so tests stay offline."""
     import seoserper.serpapi_account as m
 
     def fake_info(_key, timeout=5.0):
-        # Return a non-None dict only when caption is requested; format_quota_caption
-        # will handle None by returning None.
         if caption is None:
             return None
         return {"plan_searches_left": 87, "searches_per_month": 100}
@@ -33,12 +31,16 @@ def _stub_quota(monkeypatch, caption: str | None):
     def fake_format(_info):
         return caption
 
+    def fake_is_low(_info, threshold=20):
+        return is_low
+
     monkeypatch.setattr(m, "fetch_quota_info", fake_info)
     monkeypatch.setattr(m, "format_quota_caption", fake_format)
-    # app.py imports at module level — patch there too for the already-imported symbol.
+    monkeypatch.setattr(m, "is_quota_low", fake_is_low)
     import app as _app
     monkeypatch.setattr(_app, "fetch_quota_info", fake_info)
     monkeypatch.setattr(_app, "format_quota_caption", fake_format)
+    monkeypatch.setattr(_app, "is_quota_low", fake_is_low)
 
 
 def _isolate_db(monkeypatch, tmp_path: Path):
@@ -152,6 +154,25 @@ def test_full_mode_quota_caption_shows_when_available(monkeypatch, tmp_path):
     at = AppTest.from_file(APP_PATH).run(timeout=10)
     captions = [c.value for c in at.caption]
     assert any("SerpAPI 剩余" in c for c in captions), captions
+    # Not low → no warning widget
+    warnings = [w.value for w in at.warning]
+    assert not any("剩余" in w for w in warnings), warnings
+
+
+def test_full_mode_quota_low_renders_warning(monkeypatch, tmp_path):
+    _patch_key(monkeypatch, "fake-key")
+    _isolate_db(monkeypatch, tmp_path)
+    _stub_quota(monkeypatch, "SerpAPI 剩余 5/100", is_low=True)
+    at = AppTest.from_file(APP_PATH).run(timeout=10)
+    warnings = [w.value for w in at.warning]
+    # Streamlit's AppTest surfaces warning text — the ⚠️ glyph renders as a
+    # widget icon, not in the text. The diagnostic tail is what we check.
+    assert any(
+        "SerpAPI 剩余" in w and "配额即将耗尽" in w for w in warnings
+    ), warnings
+    # Warning replaces caption — caption should NOT carry the quota text.
+    captions = [c.value for c in at.caption]
+    assert not any("SerpAPI 剩余" in c for c in captions), captions
 
 
 def test_full_mode_quota_caption_absent_when_endpoint_fails(monkeypatch, tmp_path):

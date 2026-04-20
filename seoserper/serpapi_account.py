@@ -16,6 +16,11 @@ import requests
 ACCOUNT_URL = "https://serpapi.com/account"
 DEFAULT_TIMEOUT = 5.0
 
+# Below this threshold the UI swaps caption → warning so the operator notices
+# before the next Submit burns into exhaustion. 20 leaves headroom for a few
+# exploratory queries + a retry or two.
+QUOTA_LOW_THRESHOLD = 20
+
 
 def fetch_quota_info(api_key: str | None, timeout: float = DEFAULT_TIMEOUT) -> dict | None:
     """Return the SerpAPI account dict or None.
@@ -61,3 +66,17 @@ def format_quota_caption(info: dict | None) -> str | None:
     if isinstance(total, int) and total > 0:
         return f"SerpAPI 剩余 {left}/{total}"
     return f"SerpAPI 剩余 {left}"
+
+
+def is_quota_low(info: dict | None, threshold: int = QUOTA_LOW_THRESHOLD) -> bool:
+    """True when plan_searches_left is below threshold. False on any other shape.
+
+    Used by the UI to swap the muted caption for an `st.warning` so the
+    operator sees the low-quota cue before scheduling another Submit.
+    """
+    if not isinstance(info, dict):
+        return False
+    left = info.get("plan_searches_left")
+    if not isinstance(left, int):
+        return False
+    return left < threshold

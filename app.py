@@ -30,7 +30,11 @@ from seoserper.export import (
     render_analysis_to_md,
 )
 from seoserper.fetchers.serp_cache import fetch_serp_data_cached
-from seoserper.serpapi_account import fetch_quota_info, format_quota_caption
+from seoserper.serpapi_account import (
+    fetch_quota_info,
+    format_quota_caption,
+    is_quota_low,
+)
 from seoserper.models import (
     AnalysisJob,
     FailureCategory,
@@ -87,11 +91,12 @@ def _ensure_session_state() -> None:
         # https://serpapi.com/manage-api-key is the source of truth for exact
         # count; this is a best-effort UI hint. Refreshes only on full restart.
         if _full_mode_available():
-            ss._quota_caption = format_quota_caption(
-                fetch_quota_info(config.SERPAPI_KEY)
-            )
+            info = fetch_quota_info(config.SERPAPI_KEY)
+            ss._quota_caption = format_quota_caption(info)
+            ss._quota_is_low = is_quota_low(info)
         else:
             ss._quota_caption = None
+            ss._quota_is_low = False
 
 
 def _boot_engine() -> AnalysisEngine:
@@ -282,7 +287,10 @@ def _render_mode_notice() -> None:
         st.caption("Full mode · SerpAPI")
         quota = st.session_state.get("_quota_caption")
         if quota:
-            st.caption(quota)
+            if st.session_state.get("_quota_is_low", False):
+                st.warning(f"⚠️ {quota} — 配额即将耗尽，慎用 Submit")
+            else:
+                st.caption(quota)
     else:
         st.caption(
             "Suggest-only · SERPAPI_KEY 未设置 · 启用 Full mode 见 seoserper/config.py"

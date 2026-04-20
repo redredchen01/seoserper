@@ -7,7 +7,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 import requests
 
-from seoserper.serpapi_account import fetch_quota_info, format_quota_caption
+from seoserper.serpapi_account import (
+    QUOTA_LOW_THRESHOLD,
+    fetch_quota_info,
+    format_quota_caption,
+    is_quota_low,
+)
 
 
 def _response(status_code: int = 200, body: str = "{}"):
@@ -110,3 +115,36 @@ def test_caption_non_int_left_returns_none():
 
 def test_caption_zero_total_falls_back_to_left_only():
     assert format_quota_caption({"plan_searches_left": 0, "searches_per_month": 0}) == "SerpAPI 剩余 0"
+
+
+# --- is_quota_low ------------------------------------------------------------
+
+
+def test_is_quota_low_true_when_below_threshold():
+    assert is_quota_low({"plan_searches_left": 5}) is True
+    assert is_quota_low({"plan_searches_left": QUOTA_LOW_THRESHOLD - 1}) is True
+
+
+def test_is_quota_low_false_at_threshold():
+    assert is_quota_low({"plan_searches_left": QUOTA_LOW_THRESHOLD}) is False
+
+
+def test_is_quota_low_false_above_threshold():
+    assert is_quota_low({"plan_searches_left": 100}) is False
+
+
+def test_is_quota_low_false_on_none():
+    assert is_quota_low(None) is False
+
+
+def test_is_quota_low_false_on_non_int_left():
+    assert is_quota_low({"plan_searches_left": "many"}) is False
+
+
+def test_is_quota_low_respects_custom_threshold():
+    assert is_quota_low({"plan_searches_left": 50}, threshold=100) is True
+    assert is_quota_low({"plan_searches_left": 50}, threshold=10) is False
+
+
+def test_is_quota_low_zero_is_low():
+    assert is_quota_low({"plan_searches_left": 0}) is True
