@@ -96,13 +96,18 @@ class AnalysisEngine:
     def __init__(
         self,
         *,
-        render_thread,
-        parse_fn: ParseFn,
+        render_thread=None,
+        parse_fn: ParseFn | None = None,
         db_path: str | None = None,
         fetch_fn: FetchFn = fetch_suggestions,
         render_timeout: float = config.RENDER_TIMEOUT_SECONDS,
     ):
+        # render_thread is Optional: under ENABLE_SERP_RENDER=False the engine
+        # never enters _do_serp, so a real RenderThread is unnecessary. The
+        # invariant "run_render → render_thread is not None" is asserted in
+        # _do_serp to keep the contract machine-checked rather than convention.
         self._render_thread = render_thread
+        # parse_fn is Optional for the same reason — only consumed in _do_serp.
         self._parse_fn = parse_fn
         self._db_path = db_path
         self._fetch_fn = fetch_fn
@@ -112,22 +117,56 @@ class AnalysisEngine:
     # --- public API ---
 
     def submit(self, query: str, lang: str, country: str) -> int:
-        """INSERT a new job and spawn a background worker. Returns job_id."""
-        job_id = create_job(query, lang, country, db_path=self._db_path)
-        self._spawn_worker(job_id, query, lang, country, run_suggest=True, run_render=True)
+        """INSERT a new job and spawn a background worker. Returns job_id.
+
+        Reads ``config.ENABLE_SERP_RENDER`` once at the top to decide whether
+        to run in full mode (3 surfaces, render + parse) or suggest-only mode
+        (1 surface, Suggest HTTP only). The flag is stamped onto the job row
+        so historical jobs stay self-consistent if the live flag later flips.
+        """
+        render_mode = "full" if config.ENABLE_SERP_RENDER else "suggest-only"
+        job_id = create_job(
+            query, lang, country,
+            db_path=self._db_path,
+            render_mode=render_mode,
+        )
+        run_render = render_mode == "full"
+        self._spawn_worker(
+            job_id, query, lang, country,
+            run_suggest=True, run_render=run_render,
+        )
         return job_id
 
     def retry_failed_surfaces(self, job_id: int) -> None:
-        """Re-run only the surfaces whose current status != ok."""
+        """Re-run only the surfaces whose current status != ok.
+
+        Retry semantics depend on the *stored* render_mode, not the live flag,
+        so a historical suggest-only job stays suggest-only. ADV-1 crash-path
+        guard: if the job was created in full mode but the live flag is now
+        False (no real render_thread available), coerce retry to suggest-only
+        semantics — retry Suggest only, leave PAA/Related as-is.
+        """
         job = get_job(job_id, db_path=self._db_path)
         if job is None:
             return
 
-        run_suggest = job.surfaces[SurfaceName.SUGGEST].status != SurfaceStatus.OK
-        run_render = any(
-            job.surfaces[name].status != SurfaceStatus.OK
-            for name in (SurfaceName.PAA, SurfaceName.RELATED)
+        run_suggest = (
+            SurfaceName.SUGGEST in job.surfaces
+            and job.surfaces[SurfaceName.SUGGEST].status != SurfaceStatus.OK
         )
+        if job.render_mode == "suggest-only":
+            run_render = False
+        elif not config.ENABLE_SERP_RENDER:
+            # ADV-1 guard: historical full-mode job, live flag now off.
+            # Skip render to avoid .submit() on a None render_thread.
+            run_render = False
+        else:
+            run_render = any(
+                name in job.surfaces
+                and job.surfaces[name].status != SurfaceStatus.OK
+                for name in (SurfaceName.PAA, SurfaceName.RELATED)
+            )
+
         if not (run_suggest or run_render):
             return
 
@@ -184,6 +223,14 @@ class AnalysisEngine:
         self._emit(job_id, "suggest", status=result.status.value)
 
     def _do_serp(self, job_id: int, query: str, lang: str, country: str) -> None:
+        # Invariant: run_render=True implies the caller has configured a real
+        # render_thread + parse_fn. Assert here so misuse (e.g. a bug that
+        # routes a suggest-only job through the render path) fails loudly
+        # rather than NPE deep in _render_thread.submit.
+        assert self._render_thread is not None, (
+            "render_thread is None — suggest-only jobs must not reach _do_serp"
+        )
+        assert self._parse_fn is not None, "parse_fn is None — required under full render mode"
         url = _build_serp_url(query, lang, country)
         try:
             future = self._render_thread.submit(url)

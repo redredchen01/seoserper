@@ -31,6 +31,16 @@ from seoserper.models import (
 from seoserper.storage import get_job
 
 
+# These tests were written before the Suggest-only pivot and assume full mode
+# (3 surfaces per job). Force the flag on for the module so existing behavior
+# stays covered. Pivot-specific (suggest-only) scenarios live at the bottom of
+# this file and explicitly patch the flag off.
+@pytest.fixture(autouse=True)
+def _full_mode(monkeypatch):
+    from seoserper import config
+    monkeypatch.setattr(config, "ENABLE_SERP_RENDER", True)
+
+
 # --- fakes -------------------------------------------------------------------
 
 
@@ -402,3 +412,192 @@ def test_unhandled_exception_leaves_job_in_terminal_state(db_path):
     for name in SurfaceName:
         # all surfaces should be in a terminal state
         assert job.surfaces[name].status != SurfaceStatus.RUNNING
+
+
+# --- Suggest-only mode (Unit 2 of pivot plan 2026-04-20-002) -----------------
+
+
+class TestSuggestOnlyMode:
+    """ENABLE_SERP_RENDER=False: engine skips render, writes only Suggest row."""
+
+    @pytest.fixture(autouse=True)
+    def _flag_off(self, monkeypatch):
+        from seoserper import config
+        monkeypatch.setattr(config, "ENABLE_SERP_RENDER", False)
+
+    def test_submit_creates_suggest_only_job(self, db_path):
+        engine = AnalysisEngine(
+            render_thread=None,
+            parse_fn=None,
+            db_path=db_path,
+            fetch_fn=lambda q, l, c: _ok_suggest(q),
+        )
+        job_id = engine.submit("coffee", "en", "us")
+        events = _drain(engine)
+
+        job = get_job(job_id, db_path=db_path)
+        assert job.render_mode == "suggest-only"
+        assert list(job.surfaces.keys()) == [SurfaceName.SUGGEST]
+        assert job.surfaces[SurfaceName.SUGGEST].status == SurfaceStatus.OK
+        assert job.status == JobStatus.COMPLETED
+
+        kinds = [e.kind for e in events]
+        assert kinds == ["start", "suggest", "complete"]
+
+    def test_submit_does_not_call_render_thread(self, db_path):
+        # render_thread=None would raise if engine ever called .submit on it.
+        # Also pass a tracker object as a defensive double-check.
+        called: list[str] = []
+
+        class TrackingRender:
+            def submit(self, url):
+                called.append(url)
+                raise AssertionError("render_thread must not be called in suggest-only")
+
+        engine = AnalysisEngine(
+            render_thread=TrackingRender(),
+            parse_fn=None,
+            db_path=db_path,
+            fetch_fn=lambda q, l, c: _ok_suggest(q),
+        )
+        engine.submit("coffee", "en", "us")
+        _drain(engine)
+        assert called == []
+
+    def test_suggest_failed_yields_job_failed(self, db_path):
+        engine = AnalysisEngine(
+            render_thread=None,
+            parse_fn=None,
+            db_path=db_path,
+            fetch_fn=lambda q, l, c: _failed_suggest(FailureCategory.NETWORK_ERROR),
+        )
+        job_id = engine.submit("coffee", "en", "us")
+        events = _drain(engine)
+        job = get_job(job_id, db_path=db_path)
+        assert job.status == JobStatus.FAILED
+        assert events[-1].status == "failed"
+
+    def test_retry_on_suggest_only_does_not_invoke_render(self, db_path):
+        call_count = {"fetch": 0}
+
+        def flaky_fetch(q, l, c):
+            call_count["fetch"] += 1
+            if call_count["fetch"] == 1:
+                return _failed_suggest(FailureCategory.NETWORK_ERROR)
+            return _ok_suggest(q)
+
+        engine = AnalysisEngine(
+            render_thread=None,
+            parse_fn=None,
+            db_path=db_path,
+            fetch_fn=flaky_fetch,
+        )
+        jid = engine.submit("coffee", "en", "us")
+        _drain(engine)
+        assert get_job(jid, db_path=db_path).status == JobStatus.FAILED
+
+        engine.retry_failed_surfaces(jid)
+        _drain(engine)
+
+        job = get_job(jid, db_path=db_path)
+        assert job.status == JobStatus.COMPLETED
+        assert call_count["fetch"] == 2  # initial + retry
+
+
+class TestAdv1HistoricalRetryGuard:
+    """Pre-pivot full-mode job retried under flag=False must not invoke render."""
+
+    def test_coerces_to_suggest_only_retry(self, db_path, monkeypatch):
+        from seoserper import config
+
+        # Step 1: create a full-mode job with flag=True + 3 surfaces, Suggest ok,
+        # render fails for PAA+Related. This mimics a pre-pivot failed attempt.
+        monkeypatch.setattr(config, "ENABLE_SERP_RENDER", True)
+        engine_full = AnalysisEngine(
+            render_thread=FakeRenderThread(html=BlockedByCaptchaError("captcha")),
+            parse_fn=lambda html, locale: _ok_parsed(),
+            db_path=db_path,
+            fetch_fn=lambda q, l, c: _ok_suggest(q),
+        )
+        jid = engine_full.submit("coffee", "en", "us")
+        _drain(engine_full)
+        job = get_job(jid, db_path=db_path)
+        assert job.render_mode == "full"
+        assert job.surfaces[SurfaceName.PAA].status == SurfaceStatus.FAILED
+        assert job.surfaces[SurfaceName.RELATED].status == SurfaceStatus.FAILED
+        assert job.surfaces[SurfaceName.SUGGEST].status == SurfaceStatus.OK
+
+        # Step 2: flip flag off (simulates shipping the pivot + session restart)
+        # and instantiate a new engine with render_thread=None. Retry must NOT
+        # attempt render on the historical full-mode job.
+        monkeypatch.setattr(config, "ENABLE_SERP_RENDER", False)
+        engine_so = AnalysisEngine(
+            render_thread=None,  # no render thread under flag=False
+            parse_fn=None,
+            db_path=db_path,
+            fetch_fn=lambda q, l, c: _ok_suggest(q),
+        )
+
+        # Retry: Suggest was already ok, PAA/Related were failed. Under ADV-1
+        # guard, retry should no-op (Suggest already ok, render is skipped).
+        engine_so.retry_failed_surfaces(jid)
+        # Drain any events (expect none — retry should not spawn a worker)
+        time.sleep(0.1)
+        assert engine_so.progress_queue.empty()
+
+        # Most importantly: no AttributeError / crash from calling None.submit
+        job_after = get_job(jid, db_path=db_path)
+        assert job_after.render_mode == "full"  # unchanged
+        # PAA/Related stay as-is (FAILED) — not re-rendered, not mutated
+        assert job_after.surfaces[SurfaceName.PAA].status == SurfaceStatus.FAILED
+        assert job_after.surfaces[SurfaceName.RELATED].status == SurfaceStatus.FAILED
+
+    def test_retries_suggest_when_suggest_also_failed(self, db_path, monkeypatch):
+        """Historical full-mode job with Suggest=failed + flag off → retry Suggest only."""
+        from seoserper import config
+
+        monkeypatch.setattr(config, "ENABLE_SERP_RENDER", True)
+        # Full-mode submit where Suggest fails AND render fails
+        engine_full = AnalysisEngine(
+            render_thread=FakeRenderThread(html=BlockedByCaptchaError("captcha")),
+            parse_fn=lambda html, locale: _ok_parsed(),
+            db_path=db_path,
+            fetch_fn=lambda q, l, c: _failed_suggest(FailureCategory.NETWORK_ERROR),
+        )
+        jid = engine_full.submit("coffee", "en", "us")
+        _drain(engine_full)
+
+        # Flip flag off, recover Suggest but not render
+        monkeypatch.setattr(config, "ENABLE_SERP_RENDER", False)
+        engine_so = AnalysisEngine(
+            render_thread=None,
+            parse_fn=None,
+            db_path=db_path,
+            fetch_fn=lambda q, l, c: _ok_suggest(q),
+        )
+        engine_so.retry_failed_surfaces(jid)
+        _drain(engine_so)
+
+        job = get_job(jid, db_path=db_path)
+        assert job.surfaces[SurfaceName.SUGGEST].status == SurfaceStatus.OK
+        # PAA/Related untouched
+        assert job.surfaces[SurfaceName.PAA].status == SurfaceStatus.FAILED
+        assert job.surfaces[SurfaceName.RELATED].status == SurfaceStatus.FAILED
+
+
+class TestEngineOptionalRenderThread:
+    """render_thread is Optional; engine must accept None when only Suggest runs."""
+
+    def test_accepts_none_render_thread(self, db_path, monkeypatch):
+        from seoserper import config
+        monkeypatch.setattr(config, "ENABLE_SERP_RENDER", False)
+        engine = AnalysisEngine(
+            render_thread=None,
+            parse_fn=None,
+            db_path=db_path,
+            fetch_fn=lambda q, l, c: _ok_suggest(q),
+        )
+        # Construction + happy path both work with None
+        assert engine._render_thread is None
+        engine.submit("coffee", "en", "us")
+        _drain(engine)
