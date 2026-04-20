@@ -176,7 +176,7 @@ class AnalysisEngine:
         except BaseException as exc:
             # Safety net — engine must not leave a job in `running`.
             logger.exception("engine unhandled exception job=%d", job_id)
-            self._mark_running_surfaces_failed(job_id, FailureCategory.BROWSER_CRASH)
+            self._mark_running_surfaces_failed(job_id, FailureCategory.NETWORK_ERROR)
             try:
                 complete_job(job_id, db_path=self._db_path)
             except Exception:

@@ -15,15 +15,15 @@ status_related: failed
 
 ## Suggestions
 
-_Suggestions 获取失败: 网络错误 —— 检查连接后重试_
+_Suggestions 获取失败: 网络错误 —— 检查连接 / API key_
 
 ## People Also Ask
 
-_People Also Ask 获取失败: Google 反爬拦截（captcha）—— 建议稍候几分钟重试_
+_People Also Ask 获取失败: 被限流（SerpAPI 配额用尽 或 Suggest 限流）—— 建议等 quota 重置或 5 分钟后重试_
 
 ## Related Searches
 
-_Related Searches 获取失败: 页面结构未匹配（可能是 selector drift）_
+_Related Searches 获取失败: 响应结构未匹配（provider schema drift 或 HTML 拦截页）_
 
 ---
 

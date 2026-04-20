@@ -72,12 +72,12 @@ def test_update_surface_records_failure_category(db_path: str):
         job_id,
         SurfaceName.PAA,
         SurfaceStatus.FAILED,
-        failure_category=FailureCategory.BLOCKED_BY_CAPTCHA,
+        failure_category=FailureCategory.BLOCKED_RATE_LIMIT,
         db_path=db_path,
     )
     job = get_job(job_id, db_path=db_path)
     assert job.surfaces[SurfaceName.PAA].status == SurfaceStatus.FAILED
-    assert job.surfaces[SurfaceName.PAA].failure_category == FailureCategory.BLOCKED_BY_CAPTCHA
+    assert job.surfaces[SurfaceName.PAA].failure_category == FailureCategory.BLOCKED_RATE_LIMIT
     assert job.surfaces[SurfaceName.PAA].rank_count == 0
 
 
@@ -88,14 +88,14 @@ def test_complete_job_completed_when_any_ok(db_path: str):
         job_id,
         SurfaceName.PAA,
         SurfaceStatus.FAILED,
-        failure_category=FailureCategory.BLOCKED_BY_CAPTCHA,
+        failure_category=FailureCategory.BLOCKED_RATE_LIMIT,
         db_path=db_path,
     )
     update_surface(
         job_id,
         SurfaceName.RELATED,
         SurfaceStatus.FAILED,
-        failure_category=FailureCategory.BLOCKED_BY_CAPTCHA,
+        failure_category=FailureCategory.BLOCKED_RATE_LIMIT,
         db_path=db_path,
     )
     final = complete_job(job_id, db_path=db_path)
@@ -226,7 +226,7 @@ def test_reap_orphaned_marks_old_running_failed(db_path: str):
     assert get_job(fresh_id, db_path=db_path).status == JobStatus.RUNNING
     for s in get_job(old_id, db_path=db_path).surfaces.values():
         assert s.status == SurfaceStatus.FAILED
-        assert s.failure_category == FailureCategory.BROWSER_CRASH
+        assert s.failure_category == FailureCategory.NETWORK_ERROR
 
 
 def test_schema_v0_migration_adds_source_columns(tmp_path: Path):

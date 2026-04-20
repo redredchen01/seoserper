@@ -29,14 +29,13 @@ def test_surface_status_enum_values():
     assert {s.value for s in SurfaceStatus} == {"running", "ok", "empty", "failed"}
 
 
-def test_failure_category_six_values():
+def test_failure_category_three_values():
+    # Post plan 004 Unit C: captcha / consent / browser_crash removed with
+    # the Playwright path; only the provider-agnostic trio remains.
     assert {c.value for c in FailureCategory} == {
-        "blocked_by_captcha",
-        "blocked_by_consent",
         "blocked_rate_limit",
         "selector_not_found",
         "network_error",
-        "browser_crash",
     }
 
 

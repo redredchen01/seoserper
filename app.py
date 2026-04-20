@@ -54,12 +54,9 @@ _SURFACE_LABELS = {
 }
 
 _FAILURE_MSG = {
-    FailureCategory.BLOCKED_BY_CAPTCHA: "Google captcha 拦截 — 稍等几分钟点 Retry",
-    FailureCategory.BLOCKED_BY_CONSENT: "Google consent 屏 — 点 Retry 重走",
     FailureCategory.BLOCKED_RATE_LIMIT: "被限流 (SerpAPI 月度配额用尽 或 Suggest 限流) — 重试 或 等 quota 重置",
     FailureCategory.SELECTOR_NOT_FOUND: "响应结构异常 (provider drift 或 被拦截返回 HTML)",
     FailureCategory.NETWORK_ERROR: "网络错误 — 检查连接 / API key",
-    FailureCategory.BROWSER_CRASH: "内部异常 — Retry 重试",
 }
 
 

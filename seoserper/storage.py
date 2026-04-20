@@ -286,7 +286,7 @@ def list_recent_jobs(
 def reap_orphaned(
     threshold_minutes: int = config.ORPHAN_RUNNING_MINUTES, db_path: str | None = None
 ) -> int:
-    """Mark long-running jobs as failed (browser_crash). Return count reaped."""
+    """Mark long-running jobs as failed (network_error). Return count reaped."""
     with get_connection(db_path) as conn:
         cursor = conn.execute(
             "UPDATE jobs SET status = 'failed', overall_status = 'failed', "
@@ -297,7 +297,7 @@ def reap_orphaned(
         reaped = cursor.rowcount
         if reaped > 0:
             conn.execute(
-                "UPDATE surfaces SET status = 'failed', failure_category = 'browser_crash', "
+                "UPDATE surfaces SET status = 'failed', failure_category = 'network_error', "
                 "updated_at = CURRENT_TIMESTAMP "
                 "WHERE status = 'running' AND job_id IN ("
                 "  SELECT id FROM jobs WHERE status = 'failed' "

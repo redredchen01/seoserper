@@ -1,10 +1,11 @@
 ---
 title: "feat: SerpAPI integration — restore 3-surface mode, retire Playwright path"
 type: feat
-status: active
+status: completed
 date: 2026-04-20
 origin: docs/brainstorms/2026-04-20-google-serp-analyzer-requirements.md
 supersedes: docs/plans/2026-04-20-002-feat-suggest-only-pivot-plan.md
+completed_commits: f7a3a47 83a43c2 972e366 5891dfb c9b30c9 270fd57
 ---
 
 # SerpAPI Integration

@@ -19,7 +19,7 @@ status_related: empty
 
 ## People Also Ask
 
-_People Also Ask 获取失败: Google 反爬拦截（captcha）—— 建议稍候几分钟重试_
+_People Also Ask 获取失败: 被限流（SerpAPI 配额用尽 或 Suggest 限流）—— 建议等 quota 重置或 5 分钟后重试_
 
 ## Related Searches
 

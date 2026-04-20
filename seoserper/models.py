@@ -24,12 +24,11 @@ class SurfaceStatus(str, Enum):
 
 
 class FailureCategory(str, Enum):
-    BLOCKED_BY_CAPTCHA = "blocked_by_captcha"
-    BLOCKED_BY_CONSENT = "blocked_by_consent"
+    # Post plan 003: only these 3 values are produced. Captcha / consent /
+    # browser_crash were Playwright-era and died with render.py.
     BLOCKED_RATE_LIMIT = "blocked_rate_limit"
     SELECTOR_NOT_FOUND = "selector_not_found"
     NETWORK_ERROR = "network_error"
-    BROWSER_CRASH = "browser_crash"
 
 
 class JobStatus(str, Enum):

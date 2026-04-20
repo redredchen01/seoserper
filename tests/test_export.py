@@ -123,7 +123,7 @@ def test_partial_matches_golden():
             SurfaceName.PAA: SurfaceResult(
                 surface=SurfaceName.PAA,
                 status=SurfaceStatus.FAILED,
-                failure_category=FailureCategory.BLOCKED_BY_CAPTCHA,
+                failure_category=FailureCategory.BLOCKED_RATE_LIMIT,
             ),
             SurfaceName.RELATED: SurfaceResult(
                 surface=SurfaceName.RELATED, status=SurfaceStatus.EMPTY
@@ -147,7 +147,7 @@ def test_all_failed_matches_golden():
             SurfaceName.PAA: SurfaceResult(
                 surface=SurfaceName.PAA,
                 status=SurfaceStatus.FAILED,
-                failure_category=FailureCategory.BLOCKED_BY_CAPTCHA,
+                failure_category=FailureCategory.BLOCKED_RATE_LIMIT,
             ),
             SurfaceName.RELATED: SurfaceResult(
                 surface=SurfaceName.RELATED,
@@ -170,7 +170,7 @@ def test_frontmatter_carries_source_and_status_triplet():
             SurfaceName.PAA: SurfaceResult(
                 surface=SurfaceName.PAA,
                 status=SurfaceStatus.FAILED,
-                failure_category=FailureCategory.BLOCKED_BY_CAPTCHA,
+                failure_category=FailureCategory.BLOCKED_RATE_LIMIT,
             ),
             SurfaceName.RELATED: SurfaceResult(
                 surface=SurfaceName.RELATED, status=SurfaceStatus.EMPTY

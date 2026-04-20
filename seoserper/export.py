@@ -37,12 +37,9 @@ SURFACE_EMPTY_MESSAGES: dict[SurfaceName, str] = {
 }
 
 FAILURE_DIAGNOSTIC_ZH: dict[FailureCategory, str] = {
-    FailureCategory.BLOCKED_BY_CAPTCHA: "Google 反爬拦截（captcha）—— 建议稍候几分钟重试",
-    FailureCategory.BLOCKED_BY_CONSENT: "Google consent 屏拦截 —— 点击 Retry 触发新一轮",
-    FailureCategory.BLOCKED_RATE_LIMIT: "被限流（rate limit）—— 建议等 5 分钟后重试",
-    FailureCategory.SELECTOR_NOT_FOUND: "页面结构未匹配（可能是 selector drift）",
-    FailureCategory.NETWORK_ERROR: "网络错误 —— 检查连接后重试",
-    FailureCategory.BROWSER_CRASH: "浏览器异常 —— Retry 触发重启",
+    FailureCategory.BLOCKED_RATE_LIMIT: "被限流（SerpAPI 配额用尽 或 Suggest 限流）—— 建议等 quota 重置或 5 分钟后重试",
+    FailureCategory.SELECTOR_NOT_FOUND: "响应结构未匹配（provider schema drift 或 HTML 拦截页）",
+    FailureCategory.NETWORK_ERROR: "网络错误 —— 检查连接 / API key",
 }
 
 
