@@ -33,6 +33,13 @@ class SuggestResult:
     items: list[Suggestion] = field(default_factory=list)
     failure_category: FailureCategory | None = None
     raw_text: str = ""
+    # Library-populated fields (seoserper.suggest.get_suggestions). Fetcher-path
+    # callers leave these at defaults; library callers get populated values.
+    provider_used: str = ""  # "cache" | "google" | "static" | "none" | ""
+    from_cache: bool = False
+    latency_ms: int = 0
+    normalized_query: str = ""
+    warnings: list[str] = field(default_factory=list)
 
 
 def fetch_suggestions(

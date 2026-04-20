@@ -98,6 +98,18 @@ SUPPORTED_LOCALES: tuple[tuple[str, str, str], ...] = (
 SOURCE_SUGGEST = "Google Suggest API"
 SOURCE_SERP = "SerpAPI"
 
+# Suggest library (seoserper.suggest.get_suggestions) constants.
+# Q_MAX_LENGTH caps the normalized query length to prevent log/cache blow-up.
+# CACHE_TTL / EMPTY_TTL are enforced in SQL on the suggest_cache `status`
+# column — OK rows are served for 12h, EMPTY rows only 5min so a recovery is
+# instantly visible. RETRY_DELAY gates the library's single transient retry.
+# STATIC_FALLBACK ships OFF; flipping it on activates _static_fallback (stub).
+SUGGEST_Q_MAX_LENGTH = 128
+SUGGEST_CACHE_TTL_SECONDS = 43200  # 12h
+SUGGEST_EMPTY_TTL_SECONDS = 300  # 5min
+SUGGEST_RETRY_DELAY_SECONDS = 0.2
+SUGGEST_STATIC_FALLBACK: bool = False
+
 # Timeouts
 SUGGEST_TIMEOUT_SECONDS = 5.0
 # SerpAPI calls include Google-side scraping on the provider's servers, so
