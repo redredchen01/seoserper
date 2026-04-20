@@ -295,7 +295,9 @@ def test_retry_preserves_ok_on_retry_serp(db_path):
 # --- progress ordering -------------------------------------------------------
 
 
-def test_progress_events_emit_in_expected_order(db_path):
+def test_progress_events_cover_all_surfaces(db_path):
+    """Parallel dispatch: start + complete bookend; suggest/paa/related
+    emit in any order between them."""
     engine = AnalysisEngine(
         serp_fn=lambda q, l, c: _ok_parsed(),
         db_path=db_path,
@@ -304,7 +306,38 @@ def test_progress_events_emit_in_expected_order(db_path):
     engine.submit("coffee", "en", "us")
     events = _drain(engine)
     kinds = [e.kind for e in events]
-    assert kinds == ["start", "suggest", "paa", "related", "complete"]
+    assert kinds[0] == "start"
+    assert kinds[-1] == "complete"
+    middle = set(kinds[1:-1])
+    assert middle == {"suggest", "paa", "related"}
+
+
+def test_parallel_dispatch_wall_clock_is_not_sum(db_path):
+    """Suggest sleeps 0.3s, SerpAPI sleeps 0.3s — parallel total < 0.55s
+    (would be ~0.6s+ if serial)."""
+    import time as _time
+
+    def slow_suggest(q, l, c):
+        _time.sleep(0.3)
+        return _ok_suggest(q)
+
+    def slow_serp(q, l, c):
+        _time.sleep(0.3)
+        return _ok_parsed()
+
+    engine = AnalysisEngine(
+        serp_fn=slow_serp,
+        db_path=db_path,
+        fetch_fn=slow_suggest,
+    )
+    start = _time.monotonic()
+    engine.submit("coffee", "en", "us")
+    _drain(engine, timeout=3.0)
+    elapsed = _time.monotonic() - start
+    assert elapsed < 0.55, (
+        f"wall-clock {elapsed:.2f}s suggests serial execution "
+        f"(expected < 0.55s for two 0.3s sleeps in parallel)"
+    )
 
 
 # --- concurrency -------------------------------------------------------------

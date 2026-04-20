@@ -27,6 +27,7 @@ ADV-1 guard:
 
 from __future__ import annotations
 
+import concurrent.futures
 import logging
 import queue
 import threading
@@ -167,9 +168,29 @@ class AnalysisEngine:
                       run_suggest: bool, run_serp: bool) -> None:
         self._emit(job_id, "start")
         try:
-            if run_suggest:
+            if run_suggest and run_serp:
+                # Parallel dispatch — both providers are independent HTTPs.
+                # SQLite writes from both threads serialize on the page lock
+                # (WAL mode), which is fine for our two-thread contention.
+                # Progress events may interleave; _drain_progress on the UI
+                # side is tolerant of the reordering.
+                with concurrent.futures.ThreadPoolExecutor(
+                    max_workers=2, thread_name_prefix=f"engine-{job_id}"
+                ) as executor:
+                    f_suggest = executor.submit(
+                        self._do_suggest, job_id, query, lang, country
+                    )
+                    f_serp = executor.submit(
+                        self._do_serp, job_id, query, lang, country
+                    )
+                    # Surface the first exception (if any); the other future
+                    # has already completed or will complete inside the
+                    # context-manager shutdown.
+                    for fut in concurrent.futures.as_completed((f_suggest, f_serp)):
+                        fut.result()
+            elif run_suggest:
                 self._do_suggest(job_id, query, lang, country)
-            if run_serp:
+            elif run_serp:
                 self._do_serp(job_id, query, lang, country)
             final = complete_job(job_id, db_path=self._db_path)
             self._emit(job_id, "complete", status=final.value)
