@@ -116,6 +116,30 @@ def test_suggest_only_submit_button_still_enabled(monkeypatch, tmp_path):
 # --- common / unchanged ------------------------------------------------------
 
 
+def test_history_row_renders_both_load_and_rerun_buttons(monkeypatch, tmp_path):
+    """When history exists, each row gets a main button + a 🔄 re-run button."""
+    _patch_key(monkeypatch, None)
+    _isolate_db(monkeypatch, tmp_path)
+    # Seed a completed job so the sidebar has something to render.
+    from seoserper.storage import (
+        complete_job, create_job, init_db, update_surface,
+    )
+    from seoserper.models import Suggestion, SurfaceName, SurfaceStatus
+    db = str(tmp_path / "ui.db")
+    init_db(db)
+    jid = create_job("coffee", "en", "us", db_path=db, render_mode="suggest-only")
+    update_surface(
+        jid, SurfaceName.SUGGEST, SurfaceStatus.OK,
+        items=[Suggestion(text="coffee shop", rank=1)], db_path=db,
+    )
+    complete_job(jid, db_path=db)
+
+    at = AppTest.from_file(APP_PATH).run(timeout=10)
+    keys = [b.key for b in at.sidebar.button]
+    assert f"hist_{jid}" in keys, keys
+    assert f"rerun_{jid}" in keys, keys
+
+
 def test_app_shows_empty_history_message(monkeypatch, tmp_path):
     _patch_key(monkeypatch, None)
     _isolate_db(monkeypatch, tmp_path)

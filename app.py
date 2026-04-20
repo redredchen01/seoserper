@@ -224,12 +224,28 @@ def _render_history_sidebar() -> None:
                     _BADGES.get(s.status, "·") for s in job.surfaces.values()
                 )
                 mode_tag = "·S" if job.render_mode == "suggest-only" else ""
-                key = f"hist_{job.id}"
-                if st.button(
-                    f"{label_line}\n{job.language}-{job.country} {badges}{mode_tag}",
-                    key=key, use_container_width=True,
-                ):
-                    ss._historical_job_id = job.id
+                # Two-column row: main load button (wide) + re-run (narrow).
+                load_col, rerun_col = st.columns([5, 1])
+                with load_col:
+                    if st.button(
+                        f"{label_line}\n{job.language}-{job.country} {badges}{mode_tag}",
+                        key=f"hist_{job.id}", use_container_width=True,
+                    ):
+                        ss._historical_job_id = job.id
+                with rerun_col:
+                    if st.button(
+                        "🔄",
+                        key=f"rerun_{job.id}",
+                        help="用同样的关键字+语言+地区重新抓一次（走缓存；如要强制刷新见输入行的忽略缓存勾选）",
+                        use_container_width=True,
+                    ):
+                        engine = _boot_engine()
+                        new_id = engine.submit(
+                            job.query, job.language, job.country
+                        )
+                        ss._current_job_id = new_id
+                        ss._historical_job_id = None
+                        st.rerun()
 
 
 def _render_current(job: AnalysisJob) -> None:
