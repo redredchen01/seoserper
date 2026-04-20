@@ -1,7 +1,7 @@
 ---
 title: "feat: Suggest-only pivot — ENABLE_SERP_RENDER flag + single-section mode"
 type: feat
-status: active
+status: completed
 date: 2026-04-20
 origin: docs/brainstorms/2026-04-20-suggest-only-pivot-requirements.md
 ---
@@ -164,7 +164,7 @@ Unit 1 is foundational (schema + flag); Unit 2 and Unit 3 can land in either ord
 
 ---
 
-- [ ] **Unit 1: Config flag + schema migration + create_job branching**
+- [x] **Unit 1: Config flag + schema migration + create_job branching** (2bcd2ee)
 
 **Goal:** Introduce `ENABLE_SERP_RENDER` config + `jobs.render_mode` column + `create_job(..., render_mode=)` parameter. Foundation for every other unit.
 
@@ -209,7 +209,7 @@ Unit 1 is foundational (schema + flag); Unit 2 and Unit 3 can land in either ord
 
 ---
 
-- [ ] **Unit 2: Engine short-circuit + retry gate + models field**
+- [x] **Unit 2: Engine short-circuit + retry gate + models field** (65a01af)
 
 **Goal:** Engine reads the flag at submit time, sets `render_mode`, and skips the render path when suggest-only. Retry respects per-job mode.
 
@@ -261,7 +261,7 @@ Unit 1 is foundational (schema + flag); Unit 2 and Unit 3 can land in either ord
 
 ---
 
-- [ ] **Unit 3: MD export branching + render_mode frontmatter**
+- [x] **Unit 3: MD export branching + render_mode frontmatter** (d066814)
 
 **Goal:** Export renders one section for suggest-only jobs, three for full; frontmatter carries `render_mode`. Function stays pure.
 
@@ -302,7 +302,7 @@ Unit 1 is foundational (schema + flag); Unit 2 and Unit 3 can land in either ord
 
 ---
 
-- [ ] **Unit 4: UI collapse + preflight soft-fail + HOW_TO docs**
+- [x] **Unit 4: UI collapse + preflight soft-fail + config.py docstring** (e83fa38)
 
 **Goal:** app.py reflects the flag in every user-facing surface: top notice, single-section rendering, no RenderThread instantiation, preflight becomes soft for Suggest-only.
 
