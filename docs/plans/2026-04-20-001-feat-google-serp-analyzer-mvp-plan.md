@@ -229,7 +229,7 @@ flowchart TB
 
 ---
 
-- [ ] **Unit 1: Package scaffolding + models + SQLite storage**
+- [x] **Unit 1: Package scaffolding + models + SQLite storage** (shipped da77bd7, 25/25 tests ✓)
 
 **Goal:** 项目骨架就位——pyproject、package 结构、数据模型、SQLite schema + CRUD + orphan reaper。非功能性（为后续 unit 提供底座），但 storage 部分是 feature-bearing。
 
