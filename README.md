@@ -38,9 +38,7 @@ Open http://localhost:8501. Pick a locale (English / 简体中文 / 繁體中文
 
 ## Screenshots
 
-_Drop a PNG at `docs/screenshot.png` to render here._
-
-<!-- ![SEOSERPER UI](docs/screenshot.png) -->
+![SEOSERPER UI](docs/screenshot.png)
 
 The default view shows Google + Bing side by side with `🟰` markers on items both engines returned, a quota progress bar at the top, and a filterable history sidebar.
 
